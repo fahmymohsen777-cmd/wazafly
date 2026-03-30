@@ -1,0 +1,5 @@
+{
+  "name": "ReverseJobBoard",
+  "description": "A platform where job seekers upload CVs and HR recruiters subscribe to search for candidates.",
+  "requestFramePermissions": []
+}
