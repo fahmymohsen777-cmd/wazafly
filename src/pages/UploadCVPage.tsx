@@ -56,15 +56,15 @@ export default function UploadCVPage({ session, profile }: { session: any, profi
       const fileName = `${session.user.id}-${Math.random()}.${fileExt}`;
       const filePath = `cvs/${fileName}`;
 
-      // Upload to Supabase Storage
-      let { error: uploadError } = await supabaseAdmin.storage
+      // Upload to Supabase Storage using authenticated client (sets correct owner for RLS)
+      let { error: uploadError } = await supabase.storage
         .from('resumes')
         .upload(filePath, file);
 
       if (uploadError && uploadError.message.includes('Bucket not found')) {
         const { error: createError } = await supabaseAdmin.storage.createBucket('resumes', { public: true });
         if (!createError) {
-          const retry = await supabaseAdmin.storage.from('resumes').upload(filePath, file);
+          const retry = await supabase.storage.from('resumes').upload(filePath, file);
           uploadError = retry.error;
         } else {
           throw new Error('Storage bucket "resumes" is missing. Please run the latest SQL schema in your Supabase dashboard.');
