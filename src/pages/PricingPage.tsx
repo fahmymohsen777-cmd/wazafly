@@ -81,15 +81,15 @@ export default function PricingPage({ session, profile }: { session: any, profil
       const fileName = `${session.user.id}-${Math.random()}.${fileExt}`;
       const filePath = `${fileName}`;
 
-      let { error: uploadError } = await supabaseAdmin.storage
+      let { error: uploadError } = await supabase.storage
         .from('payments')
         .upload(filePath, file);
 
       if (uploadError && uploadError.message.includes('Bucket not found')) {
         // Try to create the bucket if it doesn't exist
-        const { error: createError } = await supabaseAdmin.storage.createBucket('payments', { public: true });
+        const { error: createError } = await supabase.storage.createBucket('payments', { public: true });
         if (!createError) {
-          const retry = await supabaseAdmin.storage.from('payments').upload(filePath, file);
+          const retry = await supabase.storage.from('payments').upload(filePath, file);
           uploadError = retry.error;
         } else {
           throw new Error('Storage bucket "payments" is missing. Please run the latest SQL schema in your Supabase dashboard.');
@@ -103,7 +103,7 @@ export default function PricingPage({ session, profile }: { session: any, profil
         .getPublicUrl(filePath);
 
       // Create payment record
-      const { error: dbError } = await supabaseAdmin
+      const { error: dbError } = await supabase
         .from('payments')
         .insert([
           { user_id: session.user.id, method: 'manual_transfer', screenshot_url: publicUrl, status: 'pending' }
