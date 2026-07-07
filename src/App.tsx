@@ -1,29 +1,29 @@
 import { BrowserRouter, Routes, Route, Link, useNavigate } from 'react-router-dom';
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, Suspense, lazy } from 'react';
 import { supabase } from './lib/supabase';
 import { LogOut, User, Search, Briefcase, Sun, Moon, Globe, Bell, BookmarkCheck, FileText, Settings, Menu, X } from 'lucide-react';
 import { SettingsProvider, useSettings } from './contexts/SettingsContext';
 
 // Pages
-import LandingPage from './pages/LandingPage';
-import LoginPage from './pages/LoginPage';
-import RegisterPage from './pages/RegisterPage';
-import DashboardPage from './pages/DashboardPage';
-import ProfilePage from './pages/ProfilePage';
-import EditProfilePage from './pages/EditProfilePage';
-import UploadCVPage from './pages/UploadCVPage';
-import SearchPage from './pages/SearchPage';
-import PricingPage from './pages/PricingPage';
-import SubscriptionPage from './pages/SubscriptionPage';
-import CandidateProfilePage from './pages/CandidateProfilePage';
-import ForgotPasswordPage from './pages/ForgotPasswordPage';
-import ResetPasswordPage from './pages/ResetPasswordPage';
-import AdminDashboardPage from './pages/AdminDashboardPage';
-import CVBankPage from './pages/cvBank/CVBankPage';
-import ShortlistPage from './pages/ShortlistPage';
-import HrSettingsPage from './pages/HrSettingsPage';
-import JobSeekerSettingsPage from './pages/JobSeekerSettingsPage';
-import CvBuilderPage from './pages/CvBuilderPage';
+const LandingPage = lazy(() => import('./pages/LandingPage'));
+const LoginPage = lazy(() => import('./pages/LoginPage'));
+const RegisterPage = lazy(() => import('./pages/RegisterPage'));
+const DashboardPage = lazy(() => import('./pages/DashboardPage'));
+const ProfilePage = lazy(() => import('./pages/ProfilePage'));
+const EditProfilePage = lazy(() => import('./pages/EditProfilePage'));
+const UploadCVPage = lazy(() => import('./pages/UploadCVPage'));
+const SearchPage = lazy(() => import('./pages/SearchPage'));
+const PricingPage = lazy(() => import('./pages/PricingPage'));
+const SubscriptionPage = lazy(() => import('./pages/SubscriptionPage'));
+const CandidateProfilePage = lazy(() => import('./pages/CandidateProfilePage'));
+const ForgotPasswordPage = lazy(() => import('./pages/ForgotPasswordPage'));
+const ResetPasswordPage = lazy(() => import('./pages/ResetPasswordPage'));
+const AdminDashboardPage = lazy(() => import('./pages/AdminDashboardPage'));
+const CVBankPage = lazy(() => import('./pages/cvBank/CVBankPage'));
+const ShortlistPage = lazy(() => import('./pages/ShortlistPage'));
+const HrSettingsPage = lazy(() => import('./pages/HrSettingsPage'));
+const JobSeekerSettingsPage = lazy(() => import('./pages/JobSeekerSettingsPage'));
+const CvBuilderPage = lazy(() => import('./pages/CvBuilderPage'));
 
 function Navbar({ session, profile, notifications, onMarkAllRead }: { session: any, profile: any, notifications: any[], onMarkAllRead: () => void }) {
   const navigate = useNavigate();
@@ -306,27 +306,29 @@ export default function App() {
         <div className="min-h-screen bg-gray-50 dark:bg-gray-900 font-sans text-gray-900 dark:text-gray-100 flex flex-col transition-colors duration-200">
           <Navbar session={session} profile={profile} notifications={notifications} onMarkAllRead={markAllRead} />
           <main className="flex-grow">
-            <Routes>
-              <Route path="/" element={<LandingPage />} />
-              <Route path="/login" element={<LoginPage />} />
-              <Route path="/register" element={<RegisterPage />} />
-              <Route path="/forgot-password" element={<ForgotPasswordPage />} />
-              <Route path="/reset-password" element={<ResetPasswordPage />} />
-              <Route path="/dashboard" element={<DashboardPage session={session} profile={profile} />} />
-              <Route path="/profile" element={<ProfilePage session={session} profile={profile} />} />
-              <Route path="/edit-profile" element={<EditProfilePage session={session} profile={profile} />} />
-              <Route path="/upload-cv" element={<UploadCVPage session={session} profile={profile} />} />
-              <Route path="/search" element={<SearchPage session={session} profile={profile} />} />
-              <Route path="/pricing" element={<PricingPage session={session} profile={profile} />} />
-              <Route path="/subscription" element={<SubscriptionPage session={session} profile={profile} />} />
-              <Route path="/candidate-profile/:id" element={<CandidateProfilePage session={session} profile={profile} />} />
-              <Route path="/cv-bank" element={<CVBankPage session={session} profile={profile} />} />
-              <Route path="/shortlist" element={<ShortlistPage session={session} profile={profile} />} />
-              <Route path="/hr-settings" element={<HrSettingsPage session={session} profile={profile} />} />
-              <Route path="/settings" element={<JobSeekerSettingsPage session={session} profile={profile} />} />
-              <Route path="/admin" element={<AdminDashboardPage session={session} profile={profile} />} />
-              <Route path="/cv-builder" element={<CvBuilderPage session={session} profile={profile} />} />
-            </Routes>
+            <Suspense fallback={<div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900 transition-colors"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div></div>}>
+              <Routes>
+                <Route path="/" element={<LandingPage />} />
+                <Route path="/login" element={<LoginPage />} />
+                <Route path="/register" element={<RegisterPage />} />
+                <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+                <Route path="/reset-password" element={<ResetPasswordPage />} />
+                <Route path="/dashboard" element={<DashboardPage session={session} profile={profile} />} />
+                <Route path="/profile" element={<ProfilePage session={session} profile={profile} />} />
+                <Route path="/edit-profile" element={<EditProfilePage session={session} profile={profile} />} />
+                <Route path="/upload-cv" element={<UploadCVPage session={session} profile={profile} />} />
+                <Route path="/search" element={<SearchPage session={session} profile={profile} />} />
+                <Route path="/pricing" element={<PricingPage session={session} profile={profile} />} />
+                <Route path="/subscription" element={<SubscriptionPage session={session} profile={profile} />} />
+                <Route path="/candidate-profile/:id" element={<CandidateProfilePage session={session} profile={profile} />} />
+                <Route path="/cv-bank" element={<CVBankPage session={session} profile={profile} />} />
+                <Route path="/shortlist" element={<ShortlistPage session={session} profile={profile} />} />
+                <Route path="/hr-settings" element={<HrSettingsPage session={session} profile={profile} />} />
+                <Route path="/settings" element={<JobSeekerSettingsPage session={session} profile={profile} />} />
+                <Route path="/admin" element={<AdminDashboardPage session={session} profile={profile} />} />
+                <Route path="/cv-builder" element={<CvBuilderPage session={session} profile={profile} />} />
+              </Routes>
+            </Suspense>
           </main>
         </div>
       </BrowserRouter>
