@@ -214,14 +214,31 @@ const translations = {
 
 let ai = null;
 try {
-  const apiKey = process.env.GEMINI_API_KEY || import.meta.env.VITE_GEMINI_API_KEY;
-  if (apiKey) {
-    ai = new GoogleGenAI({ apiKey });
-  } else {
-    console.error("Gemini API key not found. Set GEMINI_API_KEY in your environment.");
-  }
+  ai = {
+    models: {
+      generateContent: async (params) => {
+        const { data: { session } } = await supabase.auth.getSession();
+        const response = await fetch('/api/ai/proxy', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(session && { 'Authorization': `Bearer ${session.access_token}` })
+          },
+          body: JSON.stringify(params)
+        });
+        
+        if (!response.ok) {
+          const err = await response.json();
+          throw new Error(err.error || `HTTP error! status: ${response.status}`);
+        }
+        
+        const data = await response.json();
+        return { text: data.text };
+      }
+    }
+  };
 } catch (e) {
-  console.error("Failed to initialize GoogleGenAI. API key might be missing.", e);
+  console.error("Failed to initialize AI proxy wrapper.", e);
 }
 
 const generateContentWithRetry = async (ai, params, retries = 4, initialDelay = 2000) => {

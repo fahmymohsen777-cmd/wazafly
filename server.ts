@@ -1,211 +1,478 @@
-import express from "express";
+import express, { Request, Response, NextFunction } from "express";
 import { createServer as createViteServer } from "vite";
 import cors from "cors";
 import Stripe from "stripe";
 import { GoogleGenAI, Type } from "@google/genai";
+import { createClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
 
 dotenv.config();
 
+// ─── Supabase Admin (Server-side ONLY — never expose to client) ──────────────
+const supabaseAdmin = createClient(
+  process.env.SUPABASE_URL || "https://ndjoxbcedhajbiaihpeo.supabase.co",
+  process.env.SUPABASE_SERVICE_ROLE_KEY || "",
+  { auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false } }
+);
+
+// ─── Gemini helper ────────────────────────────────────────────────────────────
+function getAI() {
+  const rawKey = process.env.GEMINI_API_KEY || process.env.API_KEY;
+  let apiKey = rawKey?.replace(/^[\"']|[\"']$/g, "");
+  if (!apiKey || apiKey === "MY_GEMINI_API_KEY") apiKey = undefined;
+  return new GoogleGenAI(apiKey ? { apiKey } : {});
+}
+
+// ─── Simple in-memory rate limiter ───────────────────────────────────────────
+const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
+const RATE_LIMIT = 30; // requests per window
+const RATE_WINDOW_MS = 60_000; // 1 minute
+
+function rateLimit(req: Request, res: Response, next: NextFunction) {
+  const ip = req.ip || req.socket.remoteAddress || "unknown";
+  const now = Date.now();
+  const entry = rateLimitMap.get(ip);
+
+  if (!entry || now > entry.resetAt) {
+    rateLimitMap.set(ip, { count: 1, resetAt: now + RATE_WINDOW_MS });
+    return next();
+  }
+
+  if (entry.count >= RATE_LIMIT) {
+    return res.status(429).json({ error: "حاول مرة أخرى بعد دقيقة — تجاوزت الحد المسموح به." });
+  }
+
+  entry.count++;
+  return next();
+}
+
+// ─── Auth Middleware ──────────────────────────────────────────────────────────
+async function requireAuth(req: Request, res: Response, next: NextFunction) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith("Bearer ")) {
+    return res.status(401).json({ error: "غير مصرح — يرجى تسجيل الدخول أولاً." });
+  }
+
+  const token = authHeader.slice(7);
+  const { data: { user }, error } = await supabaseAdmin.auth.getUser(token);
+
+  if (error || !user) {
+    return res.status(401).json({ error: "جلسة منتهية الصلاحية — يرجى تسجيل الدخول مجدداً." });
+  }
+
+  (req as any).user = user;
+  next();
+}
+
+function requireRole(...roles: string[]) {
+  return async (req: Request, res: Response, next: NextFunction) => {
+    const user = (req as any).user;
+    if (!user) return res.status(401).json({ error: "غير مصرح." });
+
+    const { data: profile } = await supabaseAdmin
+      .from("users")
+      .select("role")
+      .eq("id", user.id)
+      .single();
+
+    if (!profile || !roles.includes(profile.role)) {
+      return res.status(403).json({ error: "ليس لديك صلاحية للوصول إلى هذه الخدمة." });
+    }
+
+    (req as any).profile = profile;
+    next();
+  };
+}
+
+// ─── Safe JSON parse from Gemini ─────────────────────────────────────────────
+function safeParseGeminiJson(text: string | undefined, fallback: any = {}): any {
+  if (!text) return fallback;
+  try {
+    return JSON.parse(text);
+  } catch {
+    // Strip markdown code fences if present
+    const stripped = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "").trim();
+    try {
+      return JSON.parse(stripped);
+    } catch {
+      return fallback;
+    }
+  }
+}
+
+// ─── Input validation helper ──────────────────────────────────────────────────
+function validateString(val: unknown, name: string, maxLen = 2000): string {
+  if (typeof val !== "string" || val.trim().length === 0) {
+    throw Object.assign(new Error(`الحقل "${name}" مطلوب.`), { status: 400 });
+  }
+  if (val.length > maxLen) {
+    throw Object.assign(new Error(`الحقل "${name}" يتجاوز الحد المسموح (${maxLen} حرف).`), { status: 400 });
+  }
+  return val.trim();
+}
+
+// ─── Main Server ──────────────────────────────────────────────────────────────
 async function startServer() {
   const app = express();
-  const PORT = process.env.PORT || 3001;
+  const PORT = parseInt(process.env.PORT || '3001', 10);
 
-  app.use(cors());
-  app.use(express.json());
+  // CORS — only allow our own domain
+  const allowedOrigin = process.env.APP_URL || "http://localhost:3001";
+  app.use(cors({
+    origin: (origin, cb) => {
+      if (!origin) return cb(null, true);
+      if (origin.startsWith("http://localhost:") || origin.startsWith("http://127.0.0.1:")) return cb(null, true);
+      if (origin === allowedOrigin) return cb(null, true);
+      cb(new Error("Not allowed by CORS"));
+    },
+    credentials: true,
+  }));
 
-  // Initialize Stripe (optional for MVP, using mock if no key)
-  const stripe = process.env.STRIPE_SECRET_KEY ? new Stripe(process.env.STRIPE_SECRET_KEY) : null;
+  // Raw body for Stripe webhook (must come before express.json)
+  app.use("/api/stripe/webhook", express.raw({ type: "application/json" }));
 
-  // API routes
-  console.log("STARTUP GEMINI_API_KEY:", process.env.GEMINI_API_KEY ? "SET" : "UNSET", process.env.GEMINI_API_KEY?.substring(0, 5) + "...");
-  app.get("/api/health", (req, res) => {
-    res.json({ status: "ok" });
+  // JSON body with error handling
+  app.use((req, res, next) => {
+    if (req.path === "/api/stripe/webhook") return next();
+    express.json({ limit: "20mb" })(req, res, (err) => {
+      if (err) return res.status(400).json({ error: "طلب غير صحيح — يرجى إرسال JSON صحيح." });
+      next();
+    });
   });
 
-  // AI Search Route
-  app.post("/api/ai/search", async (req, res) => {
-    try {
-      const rawKey = process.env.GEMINI_API_KEY || process.env.API_KEY;
-      let apiKey = rawKey?.replace(/^["']|["']$/g, '');
-      if (apiKey === "MY_GEMINI_API_KEY") apiKey = undefined;
-      const ai = new GoogleGenAI(apiKey ? { apiKey } : {});
-      const { query } = req.body;
-      
-      const response = await ai.models.generateContent({
-        model: "gemini-2.5-flash",
-        contents: `Convert this HR search query into JSON filters for a candidate database.
-        Query: "${query}"`,
-        config: {
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              skills: {
-                type: Type.ARRAY,
-                items: { type: Type.STRING },
-                description: "Array of skills mentioned in the query"
-              },
-              city: {
-                type: Type.STRING,
-                description: "City or location mentioned in the query"
-              },
-              minExperience: {
-                type: Type.NUMBER,
-                description: "Minimum years of experience mentioned"
-              },
-              jobTitle: {
-                type: Type.STRING,
-                description: "Job title or role mentioned"
-              },
-              maxSalary: {
-                type: Type.NUMBER,
-                description: "Maximum salary expectation mentioned"
-              }
-            }
-          }
-        }
-      });
+  // ─── Initialize Stripe ──────────────────────────────────────────────────────
+  const stripe = process.env.STRIPE_SECRET_KEY
+    ? new Stripe(process.env.STRIPE_SECRET_KEY)
+    : null;
 
-      let filters = {};
-      if (response.text) {
+  // ─── Health check ───────────────────────────────────────────────────────────
+  app.get("/api/health", (_req, res) => res.json({ status: "ok" }));
+
+  // ─── AI Search Route (HR only) ──────────────────────────────────────────────
+  app.post(
+    "/api/ai/search",
+    requireAuth,
+    requireRole("hr", "admin"),
+    rateLimit,
+    async (req: Request, res: Response) => {
+      try {
+        const query = validateString(req.body?.query, "query", 500);
+
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 25_000);
+
         try {
-          filters = JSON.parse(response.text);
-        } catch (e) {
-          console.error("JSON Parse Error:", e);
+          const ai = getAI();
+          const response = await ai.models.generateContent({
+            model: "gemini-2.5-flash",
+            contents: `Convert this HR search query into JSON filters for a candidate database.\nQuery: "${query}"`,
+            config: {
+              responseMimeType: "application/json",
+              responseSchema: {
+                type: Type.OBJECT,
+                properties: {
+                  skills: { type: Type.ARRAY, items: { type: Type.STRING }, description: "Array of skills" },
+                  city: { type: Type.STRING, description: "City or location" },
+                  minExperience: { type: Type.NUMBER, description: "Minimum years of experience" },
+                  jobTitle: { type: Type.STRING, description: "Job title" },
+                  maxSalary: { type: Type.NUMBER, description: "Maximum salary" },
+                },
+              },
+            },
+          });
+          clearTimeout(timeout);
+          res.json(safeParseGeminiJson(response.text, {}));
+        } catch (err: any) {
+          clearTimeout(timeout);
+          if (err.name === "AbortError") {
+            return res.status(504).json({ error: "انتهت مهلة الطلب — حاول مرة أخرى." });
+          }
+          throw err;
         }
+      } catch (err: any) {
+        const status = err.status || 500;
+        const isInvalidKey = err.message?.includes("API key not valid") || err.message?.includes("API_KEY_INVALID");
+        res.status(status).json({
+          error: isInvalidKey
+            ? "مفتاح Gemini غير صحيح — تحقق من إعدادات السيرفر."
+            : err.message || "فشل في معالجة البحث.",
+        });
       }
-      
-      res.json(filters);
-    } catch (error: any) {
-      console.error("AI Search Error:", error);
-      const isInvalidKey = error.message?.includes("API key not valid") || error.message?.includes("API_KEY_INVALID");
-      res.status(500).json({ 
-        error: isInvalidKey ? "Invalid Gemini API Key. If you added GEMINI_API_KEY to your Secrets, please ensure it is correct, or remove it to use the default platform key." : `Failed to process search query: ${error.message}`, 
-        details: error.message 
-      });
     }
-  });
+  );
 
-  // AI CV Builder Route
-  app.post("/api/ai/cv-builder", async (req, res) => {
-    try {
-      const rawKey = process.env.GEMINI_API_KEY || process.env.API_KEY;
-      let apiKey = rawKey?.replace(/^["']|["']$/g, '');
-      if (apiKey === "MY_GEMINI_API_KEY") apiKey = undefined;
-      const ai = new GoogleGenAI(apiKey ? { apiKey } : {});
-      const { name, experience, skills, education, projects } = req.body;
-      
-      const response = await ai.models.generateContent({
-        model: "gemini-2.5-flash",
-        contents: `Generate a professional CV in Markdown format based on the following details:
-        Name: ${name}
-        Experience: ${experience}
-        Skills: ${skills}
-        Education: ${education}
-        Projects: ${projects}
-        
-        Make it well-structured, professional, and ready to be exported as a PDF.`,
-      });
+  // ─── AI CV Builder Route (Job Seekers only) ──────────────────────────────────
+  app.post(
+    "/api/ai/cv-builder",
+    requireAuth,
+    requireRole("job_seeker"),
+    rateLimit,
+    async (req: Request, res: Response) => {
+      try {
+        const name = validateString(req.body?.name, "name", 100);
+        const experience = validateString(req.body?.experience, "experience", 2000);
+        const skills = validateString(req.body?.skills, "skills", 500);
+        const education = validateString(req.body?.education, "education", 1000);
+        const projects = req.body?.projects ? String(req.body.projects).slice(0, 2000) : "";
 
-      res.json({ cvMarkdown: response.text });
-    } catch (error: any) {
-      console.error("AI CV Builder Error:", error);
-      const isInvalidKey = error.message?.includes("API key not valid") || error.message?.includes("API_KEY_INVALID");
-      res.status(500).json({ 
-        error: isInvalidKey ? "Invalid Gemini API Key. If you added GEMINI_API_KEY to your Secrets, please ensure it is correct, or remove it to use the default platform key." : `Failed to generate CV: ${error.message}`, 
-        details: error.message 
-      });
-    }
-  });
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 30_000);
 
-  // AI Candidate Ranking Route
-  app.post("/api/ai/rank", async (req, res) => {
-    try {
-      const rawKey = process.env.GEMINI_API_KEY || process.env.API_KEY;
-      let apiKey = rawKey?.replace(/^["']|["']$/g, '');
-      if (apiKey === "MY_GEMINI_API_KEY") apiKey = undefined;
-      const ai = new GoogleGenAI(apiKey ? { apiKey } : {});
-      const { query, candidates } = req.body;
-      
-      if (!candidates || candidates.length === 0) {
-        return res.json({ rankings: [] });
-      }
+        try {
+          const ai = getAI();
+          const response = await ai.models.generateContent({
+            model: "gemini-2.5-flash",
+            contents: `Generate a professional CV in Markdown format:
+Name: ${name}
+Experience: ${experience}
+Skills: ${skills}
+Education: ${education}
+Projects: ${projects}
 
-      // Prepare a simplified list of candidates for the AI to score
-      const candidatesToScore = candidates.map((c: any) => ({
-        id: c.id,
-        job_title: c.job_title,
-        skills: c.skills,
-        experience_years: c.experience_years,
-        city: c.city
-      }));
-
-      const response = await ai.models.generateContent({
-        model: "gemini-2.5-flash",
-        contents: `You are an expert technical recruiter. Score the following candidates based on how well they match the HR search query.
-        
-        HR Search Query: "${query}"
-        
-        Candidates:
-        ${JSON.stringify(candidatesToScore, null, 2)}
-        
-        Return ONLY a JSON array of objects, where each object has:
-        - "id": the candidate id
-        - "score": an integer from 0 to 100 representing the match percentage
-        - "reason": a short 1-sentence explanation for the score
-        
-        Example: [{"id": "123", "score": 85, "reason": "Strong React skills and matches experience requirement."}]`,
-        config: {
-          responseMimeType: "application/json",
+Make it well-structured, professional, and ready to export as PDF.`,
+          });
+          clearTimeout(timeout);
+          res.json({ cvMarkdown: response.text });
+        } catch (err: any) {
+          clearTimeout(timeout);
+          if (err.name === "AbortError") {
+            return res.status(504).json({ error: "انتهت مهلة توليد السيرة الذاتية — حاول مرة أخرى." });
+          }
+          throw err;
         }
-      });
-
-      const rankings = JSON.parse(response.text || "[]");
-      res.json({ rankings });
-    } catch (error: any) {
-      console.error("AI Ranking Error:", error);
-      const isInvalidKey = error.message?.includes("API key not valid") || error.message?.includes("API_KEY_INVALID");
-      res.status(500).json({ 
-        error: isInvalidKey ? "Invalid Gemini API Key. If you added GEMINI_API_KEY to your Secrets, please ensure it is correct, or remove it to use the default platform key." : `Failed to rank candidates: ${error.message}`, 
-        details: error.message 
-      });
+      } catch (err: any) {
+        const status = err.status || 500;
+        const isInvalidKey = err.message?.includes("API key not valid") || err.message?.includes("API_KEY_INVALID");
+        res.status(status).json({
+          error: isInvalidKey
+            ? "مفتاح Gemini غير صحيح."
+            : err.message || "فشل في إنشاء السيرة الذاتية.",
+        });
+      }
     }
-  });
+  );
 
-  // Stripe Checkout Route
-  app.post("/api/stripe/create-checkout-session", async (req, res) => {
-    if (!stripe) {
-      // Mock success redirect for MVP testing if Stripe is not configured
-      console.log("Stripe not configured, mocking success redirect...");
-      return res.json({ url: `${process.env.APP_URL}/dashboard?session_id=mock_session_123` });
+  // ─── AI Proxy Route (HR only) - Replaces client-side Gemini calls ──────────
+  app.post(
+    "/api/ai/proxy",
+    requireAuth,
+    requireRole("hr", "admin"),
+    rateLimit,
+    async (req: Request, res: Response) => {
+      try {
+        const params = req.body;
+        if (!params || !params.model || !params.contents) {
+          return res.status(400).json({ error: "معلمات غير صالحة." });
+        }
+
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 60_000);
+
+        try {
+          const ai = getAI();
+          const response = await ai.models.generateContent(params);
+          clearTimeout(timeout);
+          res.json({ text: response.text });
+        } catch (err: any) {
+          clearTimeout(timeout);
+          if (err.name === "AbortError") {
+            return res.status(504).json({ error: "انتهت مهلة الطلب — حاول مرة أخرى." });
+          }
+          throw err;
+        }
+      } catch (err: any) {
+        const status = err.status || 500;
+        const isInvalidKey = err.message?.includes("API key not valid") || err.message?.includes("API_KEY_INVALID");
+        res.status(status).json({
+          error: isInvalidKey
+            ? "مفتاح Gemini غير صحيح."
+            : err.message || "فشل في معالجة طلب الذكاء الاصطناعي.",
+        });
+      }
     }
-    
+  );
+
+  // ─── AI Candidate Ranking Route (HR only) ────────────────────────────────────
+  app.post(
+    "/api/ai/rank",
+    requireAuth,
+    requireRole("hr", "admin"),
+    rateLimit,
+    async (req: Request, res: Response) => {
+      try {
+        const query = validateString(req.body?.query, "query", 500);
+        const candidates = req.body?.candidates;
+
+        if (!Array.isArray(candidates)) {
+          return res.status(400).json({ error: "الحقل 'candidates' يجب أن يكون مصفوفة." });
+        }
+        if (candidates.length === 0) return res.json({ rankings: [] });
+        if (candidates.length > 100) {
+          return res.status(400).json({ error: "الحد الأقصى 100 مرشح في الطلب الواحد." });
+        }
+
+        const candidatesToScore = candidates.map((c: any) => ({
+          id: c.id,
+          job_title: c.job_title,
+          skills: c.skills,
+          experience_years: c.experience_years,
+          city: c.city,
+        }));
+
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 30_000);
+
+        try {
+          const ai = getAI();
+          const response = await ai.models.generateContent({
+            model: "gemini-2.5-flash",
+            contents: `You are an expert technical recruiter. Score candidates based on the query.
+HR Search Query: "${query}"
+Candidates: ${JSON.stringify(candidatesToScore, null, 2)}
+Return a JSON array: [{"id": "...", "score": 0-100, "reason": "one sentence"}]`,
+            config: { responseMimeType: "application/json" },
+          });
+          clearTimeout(timeout);
+          const rankings = safeParseGeminiJson(response.text, []);
+          res.json({ rankings: Array.isArray(rankings) ? rankings : [] });
+        } catch (err: any) {
+          clearTimeout(timeout);
+          if (err.name === "AbortError") {
+            return res.status(504).json({ error: "انتهت مهلة ترتيب المرشحين — حاول مرة أخرى." });
+          }
+          throw err;
+        }
+      } catch (err: any) {
+        const status = err.status || 500;
+        res.status(status).json({ error: err.message || "فشل في ترتيب المرشحين." });
+      }
+    }
+  );
+
+  // ─── Stripe Checkout (HR only) ────────────────────────────────────────────
+  app.post(
+    "/api/stripe/create-checkout-session",
+    requireAuth,
+    requireRole("hr", "admin"),
+    async (req: Request, res: Response) => {
+      if (!stripe) {
+        return res.status(503).json({ error: "نظام الدفع غير مفعّل حالياً." });
+      }
+
+      try {
+        const priceId = validateString(req.body?.priceId, "priceId", 100);
+        const userId = (req as any).user.id;
+
+        const session = await stripe.checkout.sessions.create({
+          payment_method_types: ["card"],
+          line_items: [{ price: priceId, quantity: 1 }],
+          mode: "subscription",
+          success_url: `${process.env.APP_URL}/dashboard?session_id={CHECKOUT_SESSION_ID}`,
+          cancel_url: `${process.env.APP_URL}/pricing`,
+          client_reference_id: userId,
+          idempotency_key: `checkout-${userId}-${priceId}-${Date.now()}`,
+        } as any);
+
+        res.json({ url: session.url });
+      } catch (err: any) {
+        res.status(500).json({ error: "فشل إنشاء جلسة الدفع — حاول مرة أخرى." });
+      }
+    }
+  );
+
+  // ─── Stripe Webhook ───────────────────────────────────────────────────────
+  app.post("/api/stripe/webhook", async (req: Request, res: Response) => {
+    if (!stripe) return res.status(400).json({ error: "Stripe not configured." });
+
+    const sig = req.headers["stripe-signature"];
+    const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+
+    if (!sig || !webhookSecret) {
+      return res.status(400).json({ error: "Missing stripe-signature header or webhook secret." });
+    }
+
+    let event: Stripe.Event;
     try {
-      const { priceId, userId } = req.body;
-      
-      const session = await stripe.checkout.sessions.create({
-        payment_method_types: ["card"],
-        line_items: [
-          {
-            price: priceId,
-            quantity: 1,
-          },
-        ],
-        mode: "subscription",
-        success_url: `${process.env.APP_URL}/dashboard?session_id={CHECKOUT_SESSION_ID}`,
-        cancel_url: `${process.env.APP_URL}/pricing`,
-        client_reference_id: userId,
-      });
-
-      res.json({ url: session.url });
-    } catch (error) {
-      console.error("Stripe Error:", error);
-      res.status(500).json({ error: "Failed to create checkout session" });
+      event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
+    } catch (err: any) {
+      return res.status(400).json({ error: `Webhook signature invalid: ${err.message}` });
     }
+
+    if (event.type === "checkout.session.completed") {
+      const session = event.data.object as Stripe.Checkout.Session;
+      const userId = session.client_reference_id;
+      const subscriptionId = session.subscription as string;
+
+      if (userId && subscriptionId) {
+        // Determine plan from subscription metadata/amount
+        const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+        const priceId = subscription.items.data[0]?.price?.id || "unknown";
+
+        await supabaseAdmin.from("subscriptions").upsert({
+          user_id: userId,
+          stripe_subscription_id: subscriptionId,
+          plan: priceId,
+          status: "active",
+          updated_at: new Date().toISOString(),
+        }, { onConflict: "user_id" });
+      }
+    }
+
+    if (event.type === "customer.subscription.deleted" || event.type === "customer.subscription.updated") {
+      const subscription = event.data.object as Stripe.Subscription;
+      const customerId = subscription.customer as string;
+
+      // Find user by stripe customer id
+      const { data: sub } = await supabaseAdmin
+        .from("subscriptions")
+        .select("user_id")
+        .eq("stripe_subscription_id", subscription.id)
+        .single();
+
+      if (sub) {
+        await supabaseAdmin.from("subscriptions").update({
+          status: subscription.status === "active" ? "active" : "inactive",
+          updated_at: new Date().toISOString(),
+        }).eq("user_id", sub.user_id);
+      }
+    }
+
+    res.json({ received: true });
   });
 
-  // Vite middleware for development
+  // ─── Admin API proxy — subscriptions (used by AdminDashboardPage) ─────────
+  app.get(
+    "/api/admin/subscriptions",
+    requireAuth,
+    requireRole("admin"),
+    async (_req: Request, res: Response) => {
+      const { data, error } = await supabaseAdmin.from("subscriptions").select("*");
+      if (error) return res.status(500).json({ error: error.message });
+      res.json(data);
+    }
+  );
+
+  app.post(
+    "/api/admin/subscriptions",
+    requireAuth,
+    requireRole("admin"),
+    async (req: Request, res: Response) => {
+      const { user_id, plan, status } = req.body;
+      const { error } = await supabaseAdmin.from("subscriptions").upsert(
+        { user_id, plan, status, updated_at: new Date().toISOString() },
+        { onConflict: "user_id" }
+      );
+      if (error) return res.status(500).json({ error: error.message });
+      res.json({ ok: true });
+    }
+  );
+
+  // ─── 404 for unknown API routes ───────────────────────────────────────────
+  app.use("/api/*", (_req: Request, res: Response) => {
+    res.status(404).json({ error: "المسار غير موجود." });
+  });
+
+  // ─── Vite or static files ─────────────────────────────────────────────────
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
       server: { middlewareMode: true },
@@ -214,10 +481,26 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     app.use(express.static("dist"));
+    app.get("*", (_req, res) => res.sendFile("dist/index.html", { root: "." }));
   }
 
+  // ─── Global Error Middleware ──────────────────────────────────────────────
+  app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
+    console.error("[Server Error]", err?.message || err);
+    res.status(err?.status || 500).json({ error: "حدث خطأ داخلي في السيرفر." });
+  });
+
+  // ─── Process-level safety nets ────────────────────────────────────────────
+  process.on("uncaughtException", (err) => {
+    console.error("[uncaughtException]", err);
+  });
+
+  process.on("unhandledRejection", (reason) => {
+    console.error("[unhandledRejection]", reason);
+  });
+
   app.listen(PORT, "0.0.0.0", () => {
-    console.log("Server running on http://localhost:" + PORT);
+    console.log(`Server running on http://localhost:${PORT}`);
   });
 }
 
