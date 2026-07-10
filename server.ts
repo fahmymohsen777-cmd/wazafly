@@ -265,6 +265,14 @@ Make it well-structured, professional, and ready to export as PDF.`,
           return res.status(400).json({ error: "معلمات غير صالحة." });
         }
 
+        const ALLOWED_MODELS = ["gemini-2.5-flash"];
+        if (!ALLOWED_MODELS.includes(params.model)) {
+          return res.status(400).json({ error: "model غير مسموح" });
+        }
+        if (JSON.stringify(params.contents).length > 20000) {
+          return res.status(400).json({ error: "الطلب أكبر من المسموح" });
+        }
+
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 60_000);
 
@@ -375,7 +383,7 @@ Return a JSON array: [{"id": "...", "score": 0-100, "reason": "one sentence"}]`,
 
         res.json({ url: session.url });
       } catch (err: any) {
-        res.status(500).json({ error: "فشل إنشاء جلسة الدفع — حاول مرة أخرى." });
+        res.status(500).json({ error: "فشل إنشاء جلسة الدفع ��� حاول مرة أخرى." });
       }
     }
   );
@@ -398,46 +406,51 @@ Return a JSON array: [{"id": "...", "score": 0-100, "reason": "one sentence"}]`,
       return res.status(400).json({ error: `Webhook signature invalid: ${err.message}` });
     }
 
-    if (event.type === "checkout.session.completed") {
-      const session = event.data.object as Stripe.Checkout.Session;
-      const userId = session.client_reference_id;
-      const subscriptionId = session.subscription as string;
+    try {
+      if (event.type === "checkout.session.completed") {
+        const session = event.data.object as Stripe.Checkout.Session;
+        const userId = session.client_reference_id;
+        const subscriptionId = session.subscription as string;
 
-      if (userId && subscriptionId) {
-        // Determine plan from subscription metadata/amount
-        const subscription = await stripe.subscriptions.retrieve(subscriptionId);
-        const priceId = subscription.items.data[0]?.price?.id || "unknown";
+        if (userId && subscriptionId) {
+          // Determine plan from subscription metadata/amount
+          const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+          const priceId = subscription.items.data[0]?.price?.id || "unknown";
 
-        await supabaseAdmin.from("subscriptions").upsert({
-          user_id: userId,
-          stripe_subscription_id: subscriptionId,
-          plan: priceId,
-          status: "active",
-          updated_at: new Date().toISOString(),
-        }, { onConflict: "user_id" });
+          await supabaseAdmin.from("subscriptions").upsert({
+            user_id: userId,
+            stripe_subscription_id: subscriptionId,
+            plan: priceId,
+            status: "active",
+            updated_at: new Date().toISOString(),
+          }, { onConflict: "user_id" });
+        }
       }
-    }
 
-    if (event.type === "customer.subscription.deleted" || event.type === "customer.subscription.updated") {
-      const subscription = event.data.object as Stripe.Subscription;
-      const customerId = subscription.customer as string;
+      if (event.type === "customer.subscription.deleted" || event.type === "customer.subscription.updated") {
+        const subscription = event.data.object as Stripe.Subscription;
+        const customerId = subscription.customer as string;
 
-      // Find user by stripe customer id
-      const { data: sub } = await supabaseAdmin
-        .from("subscriptions")
-        .select("user_id")
-        .eq("stripe_subscription_id", subscription.id)
-        .single();
+        // Find user by stripe customer id
+        const { data: sub } = await supabaseAdmin
+          .from("subscriptions")
+          .select("user_id")
+          .eq("stripe_subscription_id", subscription.id)
+          .single();
 
-      if (sub) {
-        await supabaseAdmin.from("subscriptions").update({
-          status: subscription.status === "active" ? "active" : "inactive",
-          updated_at: new Date().toISOString(),
-        }).eq("user_id", sub.user_id);
+        if (sub) {
+          await supabaseAdmin.from("subscriptions").update({
+            status: subscription.status === "active" ? "active" : "inactive",
+            updated_at: new Date().toISOString(),
+          }).eq("user_id", sub.user_id);
+        }
       }
-    }
 
-    res.json({ received: true });
+      res.json({ received: true });
+    } catch (err: any) {
+      console.error("[Stripe webhook error]", err?.message || err);
+      res.status(500).json({ received: false });
+    }
   });
 
   // ─── Admin API proxy — subscriptions (used by AdminDashboardPage) ─────────
@@ -457,13 +470,23 @@ Return a JSON array: [{"id": "...", "score": 0-100, "reason": "one sentence"}]`,
     requireAuth,
     requireRole("admin"),
     async (req: Request, res: Response) => {
-      const { user_id, plan, status } = req.body;
-      const { error } = await supabaseAdmin.from("subscriptions").upsert(
-        { user_id, plan, status, updated_at: new Date().toISOString() },
-        { onConflict: "user_id" }
-      );
-      if (error) return res.status(500).json({ error: error.message });
-      res.json({ ok: true });
+      try {
+        const userId = validateString(req.body?.user_id, "user_id");
+        const plan = validateString(req.body?.plan, "plan");
+        const status = ["active", "inactive", "cancelled"].includes(req.body?.status)
+          ? req.body.status
+          : "inactive";
+
+        const { error } = await supabaseAdmin.from("subscriptions").upsert(
+          { user_id: userId, plan, status, updated_at: new Date().toISOString() },
+          { onConflict: "user_id" }
+        );
+        if (error) return res.status(500).json({ error: error.message });
+        res.json({ ok: true });
+      } catch (err: any) {
+        const status = err.status || 500;
+        res.status(status).json({ error: err.message || "فشل في تحديث الاشتراك." });
+      }
     }
   );
 
