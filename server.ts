@@ -453,6 +453,189 @@ Return a JSON array: [{"id": "...", "score": 0-100, "reason": "one sentence"}]`,
     }
   });
 
+  // ─── Admin API — list users (replaces client-side supabaseAdmin.auth.admin.listUsers) ──
+  app.get(
+    "/api/admin/users",
+    requireAuth,
+    requireRole("admin"),
+    async (_req: Request, res: Response) => {
+      try {
+        // Get auth users (requires service role key)
+        const { data: authData, error: authError } = await supabaseAdmin.auth.admin.listUsers();
+        if (authError) return res.status(500).json({ error: authError.message });
+
+        // Get public users with profiles and subscriptions
+        const { data: publicUsers, error: pubError } = await supabaseAdmin
+          .from("users")
+          .select("*, profiles(name, phone), subscriptions(status, plan)");
+        if (pubError) return res.status(500).json({ error: pubError.message });
+
+        // Sync missing auth users into public.users
+        for (const authUser of authData.users) {
+          const exists = publicUsers?.find((u: any) => u.id === authUser.id);
+          if (!exists) {
+            await supabaseAdmin.from("users").insert([{
+              id: authUser.id,
+              email: authUser.email,
+              role: authUser.user_metadata?.role || "job_seeker",
+            }]);
+            await supabaseAdmin.from("profiles").insert([{
+              user_id: authUser.id,
+              email: authUser.email,
+              name: authUser.user_metadata?.name || "Unknown User",
+            }]);
+          }
+        }
+
+        // Re-fetch after sync
+        const { data: finalUsers, error: finalError } = await supabaseAdmin
+          .from("users")
+          .select("*, profiles(name, phone), subscriptions(status, plan)");
+        if (finalError) return res.status(500).json({ error: finalError.message });
+
+        res.json(finalUsers || []);
+      } catch (err: any) {
+        res.status(500).json({ error: err.message || "فشل في جلب المستخدمين." });
+      }
+    }
+  );
+
+  // ─── Admin API — delete user (auth + public) ──────────────────────────────
+  app.delete(
+    "/api/admin/users/:id",
+    requireAuth,
+    requireRole("admin"),
+    async (req: Request, res: Response) => {
+      try {
+        const userId = req.params.id;
+        if (!userId || typeof userId !== "string") {
+          return res.status(400).json({ error: "معرّف المستخدم غير صحيح." });
+        }
+
+        // Delete from auth.users (cascades to public.users via FK if set up)
+        const { error: authDelError } = await supabaseAdmin.auth.admin.deleteUser(userId);
+        if (authDelError) {
+          // Fallback: delete from public.users only if auth deletion fails
+          console.warn("[admin/users DELETE] auth.admin.deleteUser failed:", authDelError.message);
+        }
+
+        // Always delete from public.users to ensure cleanup
+        const { error: pubDelError } = await supabaseAdmin.from("users").delete().eq("id", userId);
+        if (pubDelError) return res.status(500).json({ error: pubDelError.message });
+
+        res.json({ ok: true });
+      } catch (err: any) {
+        res.status(500).json({ error: err.message || "فشل في حذف المستخدم." });
+      }
+    }
+  );
+
+  // ─── Admin API — fetch payments (used by AdminDashboardPage) ──────────────
+  app.get(
+    "/api/admin/payments",
+    requireAuth,
+    requireRole("admin"),
+    async (_req: Request, res: Response) => {
+      const { data, error } = await supabaseAdmin
+        .from("payments")
+        .select("*, users(email, profiles(name))")
+        .order("created_at", { ascending: false });
+      if (error) return res.status(500).json({ error: error.message });
+      res.json(data || []);
+    }
+  );
+
+  // ─── Admin API — update payment status ───────────────────────────────────
+  app.patch(
+    "/api/admin/payments/:id",
+    requireAuth,
+    requireRole("admin"),
+    async (req: Request, res: Response) => {
+      try {
+        const paymentId = req.params.id;
+        const status = ["approved", "rejected", "pending"].includes(req.body?.status)
+          ? req.body.status
+          : null;
+        if (!status) return res.status(400).json({ error: "حالة غير صالحة." });
+
+        const { error } = await supabaseAdmin
+          .from("payments")
+          .update({ status })
+          .eq("id", paymentId);
+        if (error) return res.status(500).json({ error: error.message });
+        res.json({ ok: true });
+      } catch (err: any) {
+        res.status(500).json({ error: err.message || "فشل تحديث الدفعة." });
+      }
+    }
+  );
+
+  // ─── Admin API — toggle HR role ────────────────────────────────────────────
+  app.patch(
+    "/api/admin/users/:id/hr-role",
+    requireAuth,
+    requireRole("admin"),
+    async (req: Request, res: Response) => {
+      try {
+        const userId = req.params.id;
+        const hrRole = ["admin_hr", "recruiter"].includes(req.body?.hr_role)
+          ? req.body.hr_role
+          : null;
+        if (!hrRole) return res.status(400).json({ error: "hr_role غير صالح." });
+
+        const { error } = await supabaseAdmin
+          .from("users")
+          .update({ hr_role: hrRole })
+          .eq("id", userId);
+        if (error) return res.status(500).json({ error: error.message });
+        res.json({ ok: true });
+      } catch (err: any) {
+        res.status(500).json({ error: err.message || "فشل تحديث صلاحية HR." });
+      }
+    }
+  );
+
+  // ─── Admin API — update subscription ─────────────────────────────────────
+  app.patch(
+    "/api/admin/users/:id/subscription",
+    requireAuth,
+    requireRole("admin"),
+    async (req: Request, res: Response) => {
+      try {
+        const userId = req.params.id;
+        const plan = validateString(req.body?.plan, "plan", 50);
+        const status = ["active", "inactive", "cancelled"].includes(req.body?.status)
+          ? req.body.status
+          : "active";
+        const startDate = new Date().toISOString();
+        const endDate = req.body?.end_date || null;
+
+        // Check if subscription exists
+        const { data: existingSub } = await supabaseAdmin
+          .from("subscriptions")
+          .select("id")
+          .eq("user_id", userId)
+          .single();
+
+        if (existingSub) {
+          await supabaseAdmin
+            .from("subscriptions")
+            .update({ status, plan, start_date: startDate, end_date: endDate, updated_at: new Date().toISOString() })
+            .eq("id", existingSub.id);
+        } else {
+          await supabaseAdmin
+            .from("subscriptions")
+            .insert([{ user_id: userId, status, plan, start_date: startDate, end_date: endDate }]);
+        }
+
+        res.json({ ok: true });
+      } catch (err: any) {
+        const s = err.status || 500;
+        res.status(s).json({ error: err.message || "فشل تحديث الاشتراك." });
+      }
+    }
+  );
+
   // ─── Admin API proxy — subscriptions (used by AdminDashboardPage) ─────────
   app.get(
     "/api/admin/subscriptions",

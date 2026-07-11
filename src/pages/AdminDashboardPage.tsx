@@ -1,9 +1,29 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { supabase, supabaseAdmin } from '../lib/supabase';
+import { supabase } from '../lib/supabase';
 import { Users, Briefcase, UserCheck, CreditCard, CheckCircle, XCircle, Trash2, BarChart2 } from 'lucide-react';
 import { useSettings } from '../contexts/SettingsContext';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts';
+
+// ─── Helper: authenticated fetch to /api/admin/* ─────────────────────────────
+async function adminFetch(path: string, options: RequestInit = {}) {
+  const { data: { session } } = await supabase.auth.getSession();
+  const token = session?.access_token;
+  if (!token) throw new Error('غير مسجّل دخول.');
+
+  const res = await fetch(path, {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+      ...(options.headers || {}),
+    },
+  });
+
+  const json = await res.json();
+  if (!res.ok) throw new Error(json?.error || `HTTP ${res.status}`);
+  return json;
+}
 
 export default function AdminDashboardPage({ session, profile }: { session: any, profile: any }) {
   const navigate = useNavigate();
@@ -47,50 +67,41 @@ export default function AdminDashboardPage({ session, profile }: { session: any,
   const fetchAnalytics = async () => {
     setAnalyticsLoading(true);
     try {
-      // 1. New users per day (last 7 days)
-      const sevenDaysAgo = new Date();
-      sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
-      const { data: usersRaw } = await supabaseAdmin
-        .from('users')
-        .select('created_at')
-        .gte('created_at', sevenDaysAgo.toISOString());
-      if (usersRaw) {
-        const map: Record<string, number> = {};
-        for (let i = 6; i >= 0; i--) {
-          const d = new Date(); d.setDate(d.getDate() - i);
-          const key = d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' });
-          map[key] = 0;
-        }
-        usersRaw.forEach(u => {
+      // Fetch users via secure API (not direct supabase client)
+      const allUsers: any[] = await adminFetch('/api/admin/users');
+
+      // 1. New users per day (last 7 days) — derived from public.users.created_at
+      const map: Record<string, number> = {};
+      for (let i = 6; i >= 0; i--) {
+        const d = new Date(); d.setDate(d.getDate() - i);
+        const key = d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' });
+        map[key] = 0;
+      }
+      allUsers.forEach(u => {
+        if (u.created_at) {
           const key = new Date(u.created_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' });
           if (key in map) map[key]++;
-        });
-        setNewUsersData(Object.entries(map).map(([date, count]) => ({ date, count })));
-      }
+        }
+      });
+      setNewUsersData(Object.entries(map).map(([date, count]) => ({ date, count })));
 
-      // 2. Top 5 job titles
-      const { data: profiles } = await supabaseAdmin
-        .from('profiles')
-        .select('job_title')
-        .not('job_title', 'is', null);
-      if (profiles) {
-        const counts: Record<string, number> = {};
-        profiles.forEach(p => { if (p.job_title) counts[p.job_title] = (counts[p.job_title] || 0) + 1; });
-        const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 5);
-        setTopJobTitles(sorted.map(([title, count]) => ({ title: title.length > 20 ? title.slice(0,18)+'...': title, count })));
-      }
+      // 2. Top 5 job titles — derived from profiles embedded in users
+      const counts: Record<string, number> = {};
+      allUsers.forEach(u => {
+        const jt = u.profiles?.[0]?.job_title;
+        if (jt) counts[jt] = (counts[jt] || 0) + 1;
+      });
+      const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 5);
+      setTopJobTitles(sorted.map(([title, count]) => ({ title: title.length > 20 ? title.slice(0, 18) + '...' : title, count })));
 
       // 3. Subscription status
-      const { data: subs } = await supabaseAdmin.from('subscriptions').select('status');
-      if (subs) {
-        const active = subs.filter(s => s.status === 'active').length;
-        const expired = subs.length - active;
-        setSubStatusData([
-          { name: 'Active', value: active },
-          { name: 'Expired/Other', value: expired },
-        ]);
-      }
-    } catch(e) { console.error(e); }
+      const active = allUsers.filter(u => u.subscriptions?.some((s: any) => s.status === 'active')).length;
+      const expired = allUsers.length - active;
+      setSubStatusData([
+        { name: 'Active', value: active },
+        { name: 'Expired/Other', value: expired },
+      ]);
+    } catch (e) { console.error(e); }
     finally { setAnalyticsLoading(false); }
   };
 
@@ -120,61 +131,10 @@ export default function AdminDashboardPage({ session, profile }: { session: any,
   const fetchData = async () => {
     setLoading(true);
     try {
-      // Sync missing users from auth.users to public.users
-      const { data: authUsers, error: authError } = await supabaseAdmin.auth.admin.listUsers();
-      if (!authError && authUsers?.users) {
-        for (const authUser of authUsers.users) {
-          // Check if user exists in public.users
-          const { data: existingUser } = await supabaseAdmin
-            .from('users')
-            .select('id')
-            .eq('id', authUser.id)
-            .maybeSingle();
-            
-          if (!existingUser) {
-            // Insert missing user
-            await supabaseAdmin.from('users').insert([{
-              id: authUser.id,
-              email: authUser.email,
-              role: authUser.user_metadata?.role || 'job_seeker' // default fallback
-            }]);
-            
-            // Insert missing profile
-            await supabaseAdmin.from('profiles').insert([{
-              user_id: authUser.id,
-              email: authUser.email,
-              name: authUser.user_metadata?.name || 'Unknown User'
-            }]);
-          }
-        }
-      }
+      // ✅ Uses secure API endpoint (service role key stays server-side)
+      const allUsers: any[] = await adminFetch('/api/admin/users');
+      const allPayments: any[] = await adminFetch('/api/admin/payments');
 
-      // Fetch users
-      const { data: usersData, error: usersError } = await supabaseAdmin
-        .from('users')
-        .select(`
-          *,
-          profiles(name, phone),
-          subscriptions(status, plan)
-        `);
-      
-      if (usersError) throw usersError;
-
-      // Fetch payments
-      const { data: paymentsData, error: paymentsError } = await supabaseAdmin
-        .from('payments')
-        .select(`
-          *,
-          users(email, profiles(name))
-        `)
-        .order('created_at', { ascending: false });
-
-      if (paymentsError) throw paymentsError;
-
-      const allUsers = usersData || [];
-      const allPayments = paymentsData || [];
-
-      // Calculate stats
       const totalJobSeekers = allUsers.filter(u => u.role === 'job_seeker').length;
       const totalHR = allUsers.filter(u => u.role === 'hr').length;
       const activeSubs = allUsers.filter(u => u.subscriptions?.some((s: any) => s.status === 'active')).length;
@@ -209,40 +169,32 @@ export default function AdminDashboardPage({ session, profile }: { session: any,
     if (!selectedUserId) return;
     setLoading(true);
     try {
-      const startDate = new Date();
       const endDate = new Date();
       endDate.setMonth(endDate.getMonth() + Number(selectedDuration));
 
-      // Check if subscription exists
-      const { data: existingSub } = await supabaseAdmin
-        .from('subscriptions')
-        .select('id')
-        .eq('user_id', selectedUserId)
-        .single();
+      // ✅ Uses /api/admin/users/:id/subscription (service role server-side)
+      await adminFetch(`/api/admin/users/${selectedUserId}/subscription`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          plan: selectedPlan,
+          status: 'active',
+          end_date: endDate.toISOString(),
+        }),
+      });
 
-      if (existingSub) {
-        await supabaseAdmin
-          .from('subscriptions')
-          .update({ status: 'active', plan: selectedPlan, start_date: startDate.toISOString(), end_date: endDate.toISOString() })
-          .eq('id', existingSub.id);
-      } else {
-        await supabaseAdmin
-          .from('subscriptions')
-          .insert([{ user_id: selectedUserId, status: 'active', plan: selectedPlan, start_date: startDate.toISOString(), end_date: endDate.toISOString() }]);
-      }
-      
       if (selectedPaymentId) {
-        await supabaseAdmin
-          .from('payments')
-          .update({ status: 'approved' })
-          .eq('id', selectedPaymentId);
+        // ✅ Uses /api/admin/payments/:id
+        await adminFetch(`/api/admin/payments/${selectedPaymentId}`, {
+          method: 'PATCH',
+          body: JSON.stringify({ status: 'approved' }),
+        });
       }
-      
+
       setIsModalOpen(false);
       fetchData();
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error activating subscription:', error);
-      alert('Failed to modify subscription');
+      alert(error?.message || 'Failed to modify subscription');
     } finally {
       setLoading(false);
     }
@@ -250,44 +202,41 @@ export default function AdminDashboardPage({ session, profile }: { session: any,
 
   const handleDeactivateSubscription = async (userId: string) => {
     try {
-      await supabaseAdmin
-        .from('subscriptions')
-        .update({ status: 'inactive' })
-        .eq('user_id', userId);
-      
+      await adminFetch(`/api/admin/users/${userId}/subscription`, {
+        method: 'PATCH',
+        body: JSON.stringify({ plan: 'inactive', status: 'inactive' }),
+      });
       fetchData();
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error deactivating subscription:', error);
-      alert('Failed to deactivate subscription');
+      alert(error?.message || 'Failed to deactivate subscription');
     }
   };
 
   const handleDeleteUser = async (userId: string) => {
     if (!window.confirm('Are you sure you want to delete this user? This action cannot be undone.')) return;
-    
     try {
-      // In a real app, you might need to call an edge function to delete the auth user
-      // For MVP, we delete the public.users record (which might cascade or leave auth.users orphaned depending on setup)
-      await supabaseAdmin.from('users').delete().eq('id', userId);
+      // ✅ Uses DELETE /api/admin/users/:id (deletes from auth + public)
+      await adminFetch(`/api/admin/users/${userId}`, { method: 'DELETE' });
       fetchData();
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error deleting user:', error);
-      alert('Failed to delete user');
+      alert(error?.message || 'Failed to delete user');
     }
   };
 
   const handleToggleHrRole = async (userId: string, currentRole: string) => {
     try {
       const newRole = currentRole === 'admin_hr' ? 'recruiter' : 'admin_hr';
-      await supabaseAdmin
-        .from('users')
-        .update({ hr_role: newRole })
-        .eq('id', userId);
-      
+      // ✅ Uses PATCH /api/admin/users/:id/hr-role
+      await adminFetch(`/api/admin/users/${userId}/hr-role`, {
+        method: 'PATCH',
+        body: JSON.stringify({ hr_role: newRole }),
+      });
       fetchData();
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error toggling HR role:', error);
-      alert('Failed to toggle HR role');
+      alert(error?.message || 'Failed to toggle HR role');
     }
   };
 
@@ -297,15 +246,15 @@ export default function AdminDashboardPage({ session, profile }: { session: any,
 
   const handleRejectPayment = async (paymentId: string) => {
     try {
-      await supabaseAdmin
-        .from('payments')
-        .update({ status: 'rejected' })
-        .eq('id', paymentId);
-        
+      // ✅ Uses PATCH /api/admin/payments/:id
+      await adminFetch(`/api/admin/payments/${paymentId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status: 'rejected' }),
+      });
       fetchData();
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error rejecting payment:', error);
-      alert('Failed to reject payment');
+      alert(error?.message || 'Failed to reject payment');
     }
   };
 
@@ -359,17 +308,16 @@ export default function AdminDashboardPage({ session, profile }: { session: any,
           <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-5 mb-8">
             <div className="bg-white dark:bg-gray-800 overflow-hidden shadow rounded-lg pointer-events-none transition-colors border border-gray-100 dark:border-gray-700">
               <div className="p-5 flex items-center">
-                <div className="flex-shrink-0"><Users className="h-6 w-6 text-gray-400 dark:text-gray-500 dark:text-gray-400" /></div>
+                <div className="flex-shrink-0"><Users className="h-6 w-6 text-gray-400 dark:text-gray-500" /></div>
                 <div className="mx-5 w-0 flex-1">
                   <dt className="text-sm font-medium text-gray-500 dark:text-gray-400 truncate">{isAr ? 'إجمالي المستخدمين' : 'Total Users'}</dt>
                   <dd className="text-lg font-medium text-gray-900 dark:text-gray-100">{stats.totalUsers}</dd>
                 </div>
               </div>
             </div>
-            {/* ... other stats omitted for brevity, keeping the main structures localized */}
             <div className="bg-white dark:bg-gray-800 overflow-hidden shadow rounded-lg pointer-events-none transition-colors border border-gray-100 dark:border-gray-700">
               <div className="p-5 flex items-center">
-                <div className="flex-shrink-0"><Briefcase className="h-6 w-6 text-gray-400 dark:text-gray-500 dark:text-gray-400" /></div>
+                <div className="flex-shrink-0"><Briefcase className="h-6 w-6 text-gray-400 dark:text-gray-500" /></div>
                 <div className="mx-5 w-0 flex-1">
                   <dt className="text-sm font-medium text-gray-500 dark:text-gray-400 truncate">{isAr ? 'الباحثين عن عمل' : 'Job Seekers'}</dt>
                   <dd className="text-lg font-medium text-gray-900 dark:text-gray-100">{stats.totalJobSeekers}</dd>
@@ -378,10 +326,19 @@ export default function AdminDashboardPage({ session, profile }: { session: any,
             </div>
             <div className="bg-white dark:bg-gray-800 overflow-hidden shadow rounded-lg pointer-events-none transition-colors border border-gray-100 dark:border-gray-700">
               <div className="p-5 flex items-center">
-                <div className="flex-shrink-0"><UserCheck className="h-6 w-6 text-gray-400 dark:text-gray-500 dark:text-gray-400" /></div>
+                <div className="flex-shrink-0"><UserCheck className="h-6 w-6 text-gray-400 dark:text-gray-500" /></div>
                 <div className="mx-5 w-0 flex-1">
                   <dt className="text-sm font-medium text-gray-500 dark:text-gray-400 truncate">{isAr ? 'حسابات الشركات' : 'HR Accounts'}</dt>
                   <dd className="text-lg font-medium text-gray-900 dark:text-gray-100">{stats.totalHR}</dd>
+                </div>
+              </div>
+            </div>
+            <div className="bg-white dark:bg-gray-800 overflow-hidden shadow rounded-lg pointer-events-none transition-colors border border-gray-100 dark:border-gray-700">
+              <div className="p-5 flex items-center">
+                <div className="flex-shrink-0"><CheckCircle className="h-6 w-6 text-green-400" /></div>
+                <div className="mx-5 w-0 flex-1">
+                  <dt className="text-sm font-medium text-gray-500 dark:text-gray-400 truncate">{isAr ? 'اشتراكات نشطة' : 'Active Subscriptions'}</dt>
+                  <dd className="text-lg font-medium text-gray-900 dark:text-gray-100">{stats.activeSubscriptions}</dd>
                 </div>
               </div>
             </div>
@@ -412,16 +369,16 @@ export default function AdminDashboardPage({ session, profile }: { session: any,
                   </thead>
                   <tbody className="divide-y divide-gray-100 dark:divide-gray-700 bg-white dark:bg-gray-800">
                     {users.map((user) => {
-                      const profile = user.profiles?.[0] || {};
+                      const userProfile = user.profiles?.[0] || {};
                       const subscription = user.subscriptions?.[0] || {};
                       const isActive = subscription.status === 'active';
                       return (
                         <tr key={user.id} className="hover:bg-gray-50 dark:bg-slate-800 transition-colors">
                           <td className="px-6 py-4 whitespace-nowrap">
-                            <div className="font-medium text-gray-900 dark:text-gray-100">{profile.name || 'غير محدد'}</div>
+                            <div className="font-medium text-gray-900 dark:text-gray-100">{userProfile.name || 'غير محدد'}</div>
                             <div className="text-gray-500 dark:text-gray-400">{user.email}</div>
                           </td>
-                          <td className="px-6 py-4 whitespace-nowrap text-gray-900 dark:text-gray-100">{profile.phone || 'غير محدد'}</td>
+                          <td className="px-6 py-4 whitespace-nowrap text-gray-900 dark:text-gray-100">{userProfile.phone || 'غير محدد'}</td>
                           <td className="px-6 py-4 whitespace-nowrap">
                             <span className={`inline-flex items-center rounded-md px-2 py-1 text-xs font-medium ring-1 ring-inset ${user.role === 'admin' ? 'bg-purple-50 text-purple-700 ring-purple-600/20' : user.role === 'hr' ? 'bg-blue-50 text-blue-700 ring-blue-600/20' : 'bg-gray-50 dark:bg-slate-800 text-gray-600 dark:text-gray-300 ring-gray-500/10'}`}>
                               {user.role}
@@ -447,8 +404,8 @@ export default function AdminDashboardPage({ session, profile }: { session: any,
                               </button>
                             )}
                             {user.role === 'hr' && (!user.company_id || user.hr_role === 'admin_hr') && (
-                              isActive ? 
-                                <button onClick={() => openSubscriptionModal(user.id)} className="text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 ml-2 border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-900/30 rounded px-2 py-1 text-sm font-medium transition-colors">{isAr ? 'تعديل التفعيل' : 'Edit Subscription'}</button> 
+                              isActive ?
+                                <button onClick={() => openSubscriptionModal(user.id)} className="text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 ml-2 border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-900/30 rounded px-2 py-1 text-sm font-medium transition-colors">{isAr ? 'تعديل التفعيل' : 'Edit Subscription'}</button>
                                 : <button onClick={() => openSubscriptionModal(user.id)} className="text-green-600 dark:text-green-400 hover:text-green-700 dark:hover:text-green-300 ml-2 border border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-900/30 rounded px-2 py-1 text-sm font-medium transition-colors">{isAr ? 'تفعيل الباقة' : 'Activate'}</button>
                             )}
                             {user.role === 'hr' && (!user.company_id || user.hr_role === 'admin_hr') && isActive && (
@@ -501,8 +458,8 @@ export default function AdminDashboardPage({ session, profile }: { session: any,
                             </td>
                             <td className="px-6 py-4 whitespace-nowrap">
                               <span className={`inline-flex items-center rounded-md px-2 py-1 text-xs font-medium ring-1 ring-inset ${
-                                payment.status === 'approved' ? 'bg-green-50 text-green-700 ring-green-600/20' : 
-                                payment.status === 'rejected' ? 'bg-red-50 text-red-700 ring-red-600/20' : 
+                                payment.status === 'approved' ? 'bg-green-50 text-green-700 ring-green-600/20' :
+                                payment.status === 'rejected' ? 'bg-red-50 text-red-700 ring-red-600/20' :
                                 'bg-yellow-50 text-yellow-800 ring-yellow-600/20'
                               }`}>{payment.status === 'approved' ? 'مقبول' : payment.status === 'rejected' ? 'مرفوض' : 'قيد المراجعة'}</span>
                             </td>
@@ -583,7 +540,7 @@ export default function AdminDashboardPage({ session, profile }: { session: any,
         </div>
       </div>
 
-      {/* Subscription Modal - Moved outside the flex container to fix z-index issues */}
+      {/* Subscription Modal */}
       {isModalOpen && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 sm:p-0">
           <div className="fixed inset-0 transition-opacity" aria-hidden="true" onClick={() => setIsModalOpen(false)}>
@@ -595,7 +552,7 @@ export default function AdminDashboardPage({ session, profile }: { session: any,
               <h3 className="text-lg leading-6 font-medium text-gray-900 dark:text-white mb-6">
                 {isAr ? 'تأكيد تفعيل وتعديل الباقة' : 'Activate / Edit Subscription Plan'}
               </h3>
-              
+
               <div className="space-y-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{isAr ? 'اختر الباقة' : 'Select Plan'}</label>
@@ -624,7 +581,7 @@ export default function AdminDashboardPage({ session, profile }: { session: any,
                 </div>
               </div>
             </div>
-            
+
             <div className="bg-gray-50 dark:bg-slate-700/50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse border-t border-gray-100 dark:border-slate-700">
               <button
                 onClick={handleConfirmSubscription}

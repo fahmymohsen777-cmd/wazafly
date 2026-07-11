@@ -93,13 +93,20 @@ ALTER TABLE public.profile_views ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.subscriptions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.payments ENABLE ROW LEVEL SECURITY;
 
--- Create policies (Simplified for MVP, using service role bypasses these mostly anyway)
-CREATE POLICY "Users are viewable by everyone" ON public.users FOR SELECT USING (true);
+-- ============================================================
+-- RLS POLICIES
+-- SECURITY: users and profiles are restricted to authenticated
+-- users only — anon key cannot read PII even via REST API.
+-- ============================================================
+
+-- FIX (was: viewable by everyone → anyone with anon key could read all PII)
+CREATE POLICY "Users viewable by authenticated" ON public.users FOR SELECT TO authenticated USING (true);
 CREATE POLICY "Users can update their own record" ON public.users FOR UPDATE USING (auth.uid() = id);
 
 CREATE POLICY "Companies viewable by everyone" ON public.companies FOR SELECT USING (true);
 
-CREATE POLICY "Profiles are viewable by everyone" ON public.profiles FOR SELECT USING (true);
+-- FIX (was: viewable by everyone → anyone could read salary, phone, bio etc.)
+CREATE POLICY "Profiles viewable by authenticated" ON public.profiles FOR SELECT TO authenticated USING (true);
 CREATE POLICY "Users can insert their own profile" ON public.profiles FOR INSERT WITH CHECK (auth.uid() = user_id);
 CREATE POLICY "Users can update their own profile" ON public.profiles FOR UPDATE USING (auth.uid() = user_id);
 
@@ -127,7 +134,8 @@ CREATE POLICY "Users can insert their own payments" ON public.payments FOR INSER
 -- Create storage bucket for resumes
 INSERT INTO storage.buckets (id, name, public) VALUES ('resumes', 'resumes', true) ON CONFLICT DO NOTHING;
 INSERT INTO storage.buckets (id, name, public) VALUES ('avatars', 'avatars', true) ON CONFLICT DO NOTHING;
-INSERT INTO storage.buckets (id, name, public) VALUES ('payments', 'payments', true) ON CONFLICT DO NOTHING;
+-- SECURITY: payments bucket is PRIVATE — receipts accessible only via signed URLs from backend
+INSERT INTO storage.buckets (id, name, public) VALUES ('payments', 'payments', false) ON CONFLICT DO NOTHING;
 
 -- Storage policies
 CREATE POLICY "Resumes are publicly accessible" ON storage.objects FOR SELECT USING (bucket_id = 'resumes');
@@ -140,7 +148,8 @@ CREATE POLICY "Users can upload avatars" ON storage.objects FOR INSERT WITH CHEC
 CREATE POLICY "Users can update their own avatars" ON storage.objects FOR UPDATE USING (bucket_id = 'avatars' AND auth.uid() = owner);
 CREATE POLICY "Users can delete their own avatars" ON storage.objects FOR DELETE USING (bucket_id = 'avatars' AND auth.uid() = owner);
 
-CREATE POLICY "Payments are publicly accessible" ON storage.objects FOR SELECT USING (bucket_id = 'payments');
+-- SECURITY: payment receipts are private — users can only access their own
+CREATE POLICY "Users view their own payment receipts" ON storage.objects FOR SELECT USING (bucket_id = 'payments' AND auth.uid() = owner);
 CREATE POLICY "Users can upload payments" ON storage.objects FOR INSERT WITH CHECK (bucket_id = 'payments' AND auth.role() = 'authenticated');
 CREATE POLICY "Users can update their own payments" ON storage.objects FOR UPDATE USING (bucket_id = 'payments' AND auth.uid() = owner);
 CREATE POLICY "Users can delete their own payments" ON storage.objects FOR DELETE USING (bucket_id = 'payments' AND auth.uid() = owner);
