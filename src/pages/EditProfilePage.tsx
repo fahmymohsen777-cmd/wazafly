@@ -160,7 +160,8 @@ export default function EditProfilePage({ session, profile }: { session: any, pr
       const arrayBuffer = await file.arrayBuffer();
       
       if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
-        pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js`;
+        pdfjsLib.GlobalWorkerOptions.workerSrc =
+          'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.worker.min.js';
       }
       
       const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;

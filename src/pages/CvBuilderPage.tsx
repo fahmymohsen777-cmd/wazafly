@@ -1,517 +1,1000 @@
-import React, { useRef, useState, useEffect, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { GoogleGenAI, Type } from '@google/genai';
-import { useSettings } from '../contexts/SettingsContext';
+import React from 'react';
 
-// Type declarations for CDN-loaded libraries
+
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+*/
+
+// Fix: Declare html2pdf to resolve 'Cannot find name' error.
 declare var html2pdf: any;
 declare var pdfjsLib: any;
 
-// ─── Types ────────────────────────────────────────────────────
-interface ExpItem { id: number; title: string; company: string; location: string; from: string; to: string; description: string; }
-interface EduItem { id: number; degree: string; university: string; location: string; year: string; }
-interface SkillItem { id: number; text: string; }
-interface LinkItem { id: number; text: string; url: string; }
-interface CvData {
-  name: string; jobTitle: string; email: string; phone: string; address: string; summary: string;
-  links: LinkItem[]; experience: ExpItem[]; education: EduItem[];
-  skills: SkillItem[]; certifications: SkillItem[];
+// Polyfill for structuredClone
+if (!window.structuredClone) {
+  window.structuredClone = (obj) => JSON.parse(JSON.stringify(obj));
 }
 
-// ─── Defaults ────────────────────────────────────────────────
-const initialCv: CvData = {
-  name: '', jobTitle: '', email: '', phone: '', address: '', summary: '',
-  links: [], experience: [], education: [], skills: [], certifications: [],
+const translations = {
+  en: {
+    headerTitle: 'ATS-Friendly CV Builder',
+    downloadPdf: 'Download PDF',
+    guide: 'Guide',
+    cvStrengthTest: 'CV Strength Test',
+    switchLang: 'العربية',
+    importFromPdf: 'Import from PDF',
+    importing: 'Importing...',
+    importConfirm: 'This will replace all current data in the form. Are you sure you want to continue?',
+    importSuccess: 'CV data imported successfully!',
+    importError: 'Failed to import CV. Please try another file or enter the data manually.',
+    parsingPdf: 'Parsing your PDF...',
+    analyzingCvContent: 'Analyzing CV content with AI...',
+    layoutOptions: 'Layout Options',
+    pageLayout: 'Page Layout',
+    onePage: 'One Page',
+    twoPages: 'Two Pages',
+    autoMultiPage: 'Auto (Multi-page)',
+    fontSize: 'Font Size',
+    sectionVisibility: 'CV Sections (Show/Hide)',
+    sectionOrder: 'Drag to reorder sections',
+    moveUp: '↑',
+    moveDown: '↓',
+    personalInfo: 'Personal Information',
+    fullName: 'Full Name',
+    jobTitle: 'Job Title / Headline',
+    email: 'Email',
+    phone: 'Phone',
+    linkedin: 'LinkedIn Profile',
+    address: 'Address',
+    links: 'Links',
+    displayText: 'Display Text',
+    url: 'URL',
+    addLink: 'Add Link',
+    professionalSummary: 'Professional Summary',
+    summary: 'Summary',
+    workExperience: 'Work Experience',
+    position: 'Position Title',
+    company: 'Company',
+    location: 'Location',
+    from: 'From',
+    to: 'To',
+    description: 'Description',
+    remove: 'Remove',
+    addExperience: 'Add Experience',
+    education: 'Education',
+    degree: 'Degree',
+    university: 'University / Institution',
+    graduationYear: 'Graduation Year',
+    addEducation: 'Add Education',
+    skills: 'Skills',
+    skill: 'Skill',
+    addSkill: 'Add Skill',
+    certifications: 'Certifications',
+    certification: 'Certification',
+    addCertification: 'Add Certification',
+    preview_summary_placeholder: 'Write your professional summary here...',
+    preview_job_title: 'Job Title',
+    preview_from: 'From',
+    preview_to: 'To',
+    preview_company: 'Company',
+    preview_location: 'Location',
+    preview_degree: 'Degree',
+    preview_graduated: 'Graduated',
+    preview_year: 'Year',
+    preview_university: 'University',
+    preview_skill: 'Skill',
+    preview_certification: 'Certification',
+    guideTitle: 'Guide: How to Create an ATS-Friendly CV',
+    guideIntro: 'Here are key tips from best practices to create a standout, ATS-friendly CV:',
+    guideStructureTitle: '1. CV Structure & Content',
+    guideStructure: [
+      'Header: Include your name, phone number, professional email, and LinkedIn profile.',
+      'Summary: A 2-3 line "elevator pitch" summarizing your skills and career goals.',
+      'Skills: Group similar tools and technologies (e.g., "Programming: SQL, Python").',
+      'Experience: Use past tense verbs. Focus on your accomplishments, tools used, and quantifiable impact (e.g., "Increased sales by 20%").',
+      'Projects: Showcase 2 impactful academic or personal projects. Quantify results where possible.',
+      'Education: List your highest degree. Include your GPA if it\'s above average.'
+    ],
+    guideAtsTitle: '2. ATS-Friendly Tips',
+    guideAts: [
+      'No Tables/Columns/Images: ATS systems can struggle to parse these elements. A single-column layout is safest.',
+      'Simple Fonts & Clear Headings: Use standard fonts and clear section titles (e.g., "Work Experience").',
+      'Use Keywords: Include keywords from the job description throughout your CV.',
+      'Quantify Achievements: Use numbers and metrics to highlight your impact (e.g., "Managed a $50,000 budget").',
+      'Save as PDF: This preserves formatting. Our tool does this for you!',
+      'Keep it Concise: Aim for one page if you have less than 10 years of experience.'
+    ],
+    createdBy: 'Created by Fahmy mohsen',
+    enterJobTitle: 'Enter the job title you are applying for:',
+    analyzeCv: 'Analyze CV',
+    analysisResults: 'Analysis Results',
+    yourCvScore: 'Your CV Score',
+    suggestionsForImprovement: 'Suggestions for Improvement',
+    analyzing: 'Analyzing your CV...',
+    errorEnterJobTitle: 'Please enter a job title.',
+    errorAnalysisFailed: 'Failed to analyze the CV. Please try again.',
+  },
+  ar: {
+    headerTitle: 'منشئ السيرة الذاتية',
+    downloadPdf: 'تحميل PDF',
+    guide: 'دليل',
+    cvStrengthTest: 'اختبار قوة السيرة الذاتية',
+    switchLang: 'English',
+    importFromPdf: 'استيراد من PDF',
+    importing: 'جاري الاستيراد...',
+    importConfirm: 'سيؤدي هذا إلى استبدال جميع البيانات الحالية في النموذج. هل أنت متأكد من أنك تريد المتابعة؟',
+    importSuccess: 'تم استيراد بيانات السيرة الذاتية بنجاح!',
+    importError: 'فشل استيراد السيرة الذاتية. يرجى تجربة ملف آخر أو إدخال البيانات يدويًا.',
+    parsingPdf: 'جاري تحليل ملف PDF الخاص بك...',
+    analyzingCvContent: 'جاري تحليل محتوى السيرة الذاتية بالذكاء الاصطناعي...',
+    layoutOptions: 'خيارات التنسيق',
+    pageLayout: 'تنسيق الصفحة',
+    onePage: 'صفحة واحدة',
+    twoPages: 'صفحتان',
+    autoMultiPage: 'تلقائي (متعدد الصفحات)',
+    fontSize: 'حجم الخط',
+    sectionVisibility: 'أقسام السيرة الذاتية (إظهار/إخفاء)',
+    sectionOrder: 'اسحب لإعادة الترتيب',
+    moveUp: '↑',
+    moveDown: '↓',
+    personalInfo: 'المعلومات الشخصية',
+    fullName: 'الاسم الكامل',
+    jobTitle: 'المسمى الوظيفي/العنوان',
+    email: 'البريد الإلكتروني',
+    phone: 'الهاتف',
+    linkedin: 'رابط لينكدإن',
+    address: 'العنوان',
+    links: 'روابط',
+    displayText: 'نص العرض',
+    url: 'الرابط',
+    addLink: 'إضافة رابط',
+    professionalSummary: 'الملخص الاحترافي',
+    summary: 'الملخص',
+    workExperience: 'الخبرة العملية',
+    position: 'المسمى الوظيفي',
+    company: 'الشركة',
+    location: 'الموقع',
+    from: 'من',
+    to: 'إلى',
+    description: 'الوصف',
+    remove: 'إزالة',
+    addExperience: 'إضافة خبرة',
+    education: 'التعليم',
+    degree: 'الشهادة',
+    university: 'الجامعة/المؤسسة',
+    graduationYear: 'سنة التخرج',
+    addEducation: 'إضافة تعليم',
+    skills: 'المهارات',
+    skill: 'مهارة',
+    addSkill: 'إضافة مهارة',
+    certifications: 'الشهادات',
+    certification: 'شهادة',
+    addCertification: 'إضافة شهادة',
+    preview_summary_placeholder: 'اكتب ملخصك الاحترافي هنا...',
+    preview_job_title: 'المسمى الوظيفي',
+    preview_from: 'من',
+    preview_to: 'إلى',
+    preview_company: 'الشركة',
+    preview_location: 'الموقع',
+    preview_degree: 'الشهادة',
+    preview_graduated: 'تخرج',
+    preview_year: 'السنة',
+    preview_university: 'الجامعة',
+    preview_skill: 'مهارة',
+    preview_certification: 'شهادة',
+    guideTitle: 'دليل: كيفية إنشاء سيرة ذاتية متوافقة مع ATS',
+    guideIntro: 'إليك أهم النصائح من أفضل الممارسات لإنشاء سيرة ذاتية مميزة ومتوافقة مع أنظمة تتبع المتقدمين (ATS):',
+    guideStructureTitle: '١. هيكل ومحتوى السيرة الذاتية',
+    guideStructure: [
+        'المقدمة (Header): يجب أن تحتوي على اسمك، رقم هاتفك، بريدك الإلكتروني الاحترافي، ورابط ملفك على لينكدإن.',
+        'الملخص: "نبذة تعريفية" من سطرين إلى ثلاثة تلخص مهاراتك وأهدافك المهنية.',
+        'المهارات: قسّم الأدوات والتقنيات المتشابهة في مجموعات (مثال: "البرمجة: SQL, Python").',
+        'الخبرة: استخدم أفعالاً في صيغة الماضي. ركز على إنجازاتك، الأدوات التي استخدمتها، والنتائج القابلة للقياس (مثال: "زيادة المبيعات بنسبة 20%").',
+        'المشاريع: اعرض مشروعين مؤثرين، سواء كانت أكاديمية أو شخصية. حدد النتائج بالأرقام إن أمكن.',
+        'التعليم: اذكر أعلى شهادة علمية حصلت عليها. أضف المعدل التراكمي إذا كان مرتفعًا.'
+    ],
+    guideAtsTitle: '٢. نصائح للتوافق مع أنظمة ATS',
+    guideAts: [
+        'تجنب الجداول/الأعمدة/الصور: قد تواجه أنظمة ATS صعوبة في قراءة هذه العناصر. التصميم ذو العمود الواحد هو الأكثر أمانًا.',
+        'خطوط بسيطة وعناوين واضحة: استخدم خطوطًا قياسية وعناوين أقسام واضحة (مثل: "الخبرة العملية").',
+        'استخدم الكلمات المفتاحية: قم بتضمين الكلمات المفتاحية من الوصف الوظيفي في سيرتك الذاتية.',
+        'حدد إنجازاتك بالأرقام: استخدم الأرقام والمقاييس لتسليط الضوء على تأثيرك (مثال: "إدارة ميزانية بقيمة 50,000 دولار").',
+        'احفظ الملف بصيغة PDF: هذا يحافظ على التنسيق. أداتنا تقوم بذلك من أجلك!',
+        'اجعلها موجزة: استهدف صفحة واحدة إذا كانت لديك خبرة أقل من 10 سنوات.'
+    ],
+    createdBy: 'صنع بواسطة فهمي محسن',
+    enterJobTitle: 'أدخل المسمى الوظيفي الذي تتقدم إليه:',
+    analyzeCv: 'تحليل السيرة الذاتية',
+    analysisResults: 'نتائج التحليل',
+    yourCvScore: 'درجة سيرتك الذاتية',
+    suggestionsForImprovement: 'اقتراحات للتحسين',
+    analyzing: 'جاري تحليل سيرتك الذاتية...',
+    errorEnterJobTitle: 'الرجاء إدخال مسمى وظيفي.',
+    errorAnalysisFailed: 'فشل تحليل السيرة الذاتية. يرجى المحاولة مرة أخرى.',
+  }
 };
 
-const CV_KEY = 'wazafly_cv_builder_data';
+const initialCvData = {
+  name: 'Michael Harris',
+  jobTitle: 'Digital Marketing | SEO | SEM | Content Marketing',
+  email: 'michael.harris@email.com',
+  phone: '+61 412 345 678',
+  links: [
+    { id: 1, text: 'LinkedIn', url: 'https://linkedin.com/in/michaelharris' }
+  ],
+  address: 'Sydney, Australia',
+  summary: 'Results-oriented marketing professional with over 5 years of experience in digital marketing, brand strategy, and content creation. Proven ability to drive brand growth, increase online engagement, and deliver data-driven results. Expert in utilizing digital tools and analytics to optimize marketing campaigns and achieve business objectives.',
+  experience: [
+    { id: 1, title: 'Marketing Manager', company: 'XYZ Corporation', location: 'Sydney, NSW', from: 'January 2022', to: 'Present', description: '• Lead a team of 5 in creating and executing digital marketing strategies across multiple platforms, including social media, SEO, and email campaigns.\n• Achieved a 35% increase in website traffic and 50% boost in social media engagement within the first year.\n• Managed a marketing budget of $200,000, ensuring maximum ROI through cost-effective advertising strategies.' },
+    { id: 2, title: 'Digital Marketing Specialist', company: 'ABC Solutions', location: 'Melbourne, VIC', from: 'June 2018', to: 'December 2021', description: '• Developed and executed SEO and SEM strategies that increased organic search traffic by 25%.\n• Created and managed Google Ads and Facebook Ads campaigns, resulting in a 20% increase in qualified leads.\n• Produced engaging content for blogs, newsletters, and social media platforms to attract target audiences.' },
+  ],
+  education: [
+    { id: 1, degree: 'Bachelor of Marketing', university: 'University of Sydney', location: 'Sydney, NSW', year: '2018' }
+  ],
+  skills: [
+    { id: 1, text: 'Digital Marketing Strategy, SEO & SEM, Google Analytics & SEMrush' },
+    { id: 2, text: 'Social Media Marketing, Content Creation & Copywriting, Budget Management, Data Analysis' },
+  ],
+  certifications: [
+    { id: 1, text: 'Google Analytics Certified' },
+    { id: 2, text: 'Facebook Blueprint Certification' },
+    { id: 3, text: 'HubSpot Inbound Marketing Certification' },
+  ],
+};
 
-function loadCv(): CvData {
+const CV_DATA_STORAGE_KEY = 'cv-builder-data';
+const SETTINGS_STORAGE_KEY = 'cv-builder-settings';
+
+const loadCvDataFromStorage = () => {
   try {
-    const raw = localStorage.getItem(CV_KEY);
-    if (raw) return JSON.parse(raw) as CvData;
-  } catch (_) {}
-  return structuredClone(initialCv);
-}
+    const savedData = localStorage.getItem(CV_DATA_STORAGE_KEY);
+    if (savedData) {
+      const parsedData = JSON.parse(savedData);
+      // Migration for old data structure with linkedin property
+      if (parsedData.linkedin && !Array.isArray(parsedData.links)) {
+        let url = parsedData.linkedin;
+        if (url && !url.startsWith('http')) {
+            url = `https://${url}`;
+        }
+        parsedData.links = [{ id: 1, text: 'LinkedIn', url: url }];
+        delete parsedData.linkedin;
+      }
+      // Ensure links is always an array
+      if (!Array.isArray(parsedData.links)) {
+          parsedData.links = [];
+      }
+      return parsedData;
+    }
+  } catch (error) {
+    console.error("Failed to load or parse CV data from localStorage", error);
+  }
+  return structuredClone(initialCvData);
+};
 
-// ─── Main Component ──────────────────────────────────────────
-export default function CvBuilderPage({ session, profile }: { session: any; profile: any }) {
-  const navigate = useNavigate();
-  const [cv, setCv] = useState<CvData>(loadCv);
-  const [pageLayout, setPageLayout] = useState<'auto' | 'one-page'>('auto');
-  const [fontSize, setFontSize] = useState(11);
-  const { language: lang } = useSettings();
-  const [importStatus, setImportStatus] = useState('');
-  const [isImporting, setIsImporting] = useState(false);
-  const fileRef = useRef<HTMLInputElement>(null);
-  const previewRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    if (!session || profile?.role !== 'job_seeker') navigate('/dashboard');
-  }, [session, profile]);
+const DEFAULT_SECTIONS = [
+  { key: 'summary', labelEn: 'Professional Summary', labelAr: 'الملخص الاحترافي', visible: true },
+  { key: 'experience', labelEn: 'Work Experience', labelAr: 'الخبرة العملية', visible: true },
+  { key: 'education', labelEn: 'Education', labelAr: 'التعليم', visible: true },
+  { key: 'skills', labelEn: 'Skills', labelAr: 'المهارات', visible: true },
+  { key: 'certifications', labelEn: 'Certifications', labelAr: 'الشهادات', visible: true },
+];
 
-  useEffect(() => {
-    try { localStorage.setItem(CV_KEY, JSON.stringify(cv)); } catch (_) {}
-  }, [cv]);
+const loadSettingsFromStorage = () => {
+  try {
+    const savedData = localStorage.getItem(SETTINGS_STORAGE_KEY);
+    if (savedData) {
+      const parsed = JSON.parse(savedData);
+      // Ensure sections exist with defaults
+      if (!parsed.sections) {
+        parsed.sections = structuredClone(DEFAULT_SECTIONS);
+      }
+      return parsed;
+    }
+  } catch (error) {
+    console.error("Failed to load or parse settings from localStorage", error);
+  }
+  return { pageLayout: 'auto', fontSize: 11, sections: structuredClone(DEFAULT_SECTIONS) };
+};
 
-  // ─── Field helpers ──────────────────────────────────────────
-  const setField = (field: keyof CvData, value: any) => setCv(p => ({ ...p, [field]: value }));
 
-  const updateItem = <T extends { id: number }>(
-    section: keyof CvData, id: number, field: keyof T, value: any
-  ) => setCv(p => ({
-    ...p,
-    [section]: (p[section] as T[]).map(item => item.id === id ? { ...item, [field]: value } : item),
-  }));
+const App = () => {
+  const [cvData, setCvData] = React.useState(loadCvDataFromStorage);
+  const [settings, setSettings] = React.useState(loadSettingsFromStorage);
+  const { pageLayout, fontSize, sections } = settings;
+  const [language, setLanguage] = React.useState('en');
+  const [isGuideVisible, setGuideVisible] = React.useState(false);
+  const [isTesterVisible, setTesterVisible] = React.useState(false);
+  const [importStatus, setImportStatus] = React.useState('');
+  const [dragOverKey, setDragOverKey] = React.useState(null);
+  const fileInputRef = React.useRef(null);
+  const t = translations[language];
 
-  const addItem = (section: keyof CvData) => {
-    const list = cv[section] as any[];
-    const id = list.length > 0 ? Math.max(...list.map((i: any) => i.id)) + 1 : 1;
-    let blank: any;
-    if (section === 'experience') blank = { id, title: '', company: '', location: '', from: '', to: '', description: '' };
-    else if (section === 'education') blank = { id, degree: '', university: '', location: '', year: '' };
-    else if (section === 'links') blank = { id, text: '', url: '' };
-    else blank = { id, text: '' };
-    setCv(p => ({ ...p, [section]: [...(p[section] as any[]), blank] }));
+  const toggleSectionVisibility = (key) => {
+    setSettings(s => ({
+      ...s,
+      sections: s.sections.map(sec => sec.key === key ? { ...sec, visible: !sec.visible } : sec)
+    }));
   };
 
-  const removeItem = (section: keyof CvData, id: number) =>
-    setCv(p => ({ ...p, [section]: (p[section] as any[]).filter((i: any) => i.id !== id) }));
+  const moveSectionUp = (index) => {
+    if (index === 0) return;
+    setSettings(s => {
+      const newSections = [...s.sections];
+      [newSections[index - 1], newSections[index]] = [newSections[index], newSections[index - 1]];
+      return { ...s, sections: newSections };
+    });
+  };
 
-  // ─── PDF Download ────────────────────────────────────────────
-  const handleDownload = () => {
-    const el = previewRef.current;
-    if (!el) return;
-    html2pdf().from(el).set({
+  const moveSectionDown = (index) => {
+    setSettings(s => {
+      if (index === s.sections.length - 1) return s;
+      const newSections = [...s.sections];
+      [newSections[index], newSections[index + 1]] = [newSections[index + 1], newSections[index]];
+      return { ...s, sections: newSections };
+    });
+  };
+
+  const handleDragStart = (e, index) => {
+    e.dataTransfer.setData('dragIndex', index);
+  };
+
+  const handleDrop = (e, targetIndex) => {
+    const dragIndex = parseInt(e.dataTransfer.getData('dragIndex'));
+    if (dragIndex === targetIndex) return;
+    setSettings(s => {
+      const newSections = [...s.sections];
+      const [removed] = newSections.splice(dragIndex, 1);
+      newSections.splice(targetIndex, 0, removed);
+      return { ...s, sections: newSections };
+    });
+    setDragOverKey(null);
+  };
+
+  React.useEffect(() => {
+    document.documentElement.lang = language;
+    document.documentElement.dir = language === 'ar' ? 'rtl' : 'ltr';
+  }, [language]);
+
+  React.useEffect(() => {
+    try {
+      localStorage.setItem(CV_DATA_STORAGE_KEY, JSON.stringify(cvData));
+    } catch (error) {
+      console.error("Failed to save CV data to localStorage", error);
+    }
+  }, [cvData]);
+
+  React.useEffect(() => {
+    try {
+      localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+    } catch (error) {
+      console.error("Failed to save settings to localStorage", error);
+    }
+  }, [settings]);
+  
+  const toggleLanguage = () => {
+    setLanguage(prev => prev === 'en' ? 'ar' : 'en');
+  };
+
+  const handleChange = (e) => {
+    const { name, value } = e.target;
+    setCvData(prev => ({ ...prev, [name]: value }));
+  };
+
+  const handleDynamicChange = (section, id, e) => {
+    const { name, value } = e.target;
+    setCvData(prev => {
+      const newSection = prev[section].map(item =>
+        item.id === id ? { ...item, [name]: value } : item
+      );
+      return { ...prev, [section]: newSection };
+    });
+  };
+
+  const addDynamicItem = (section) => {
+    setCvData(prev => {
+      const newId = prev[section].length > 0 ? Math.max(...prev[section].map(i => i.id)) + 1 : 1;
+      let newItem;
+      switch (section) {
+        case 'experience':
+          newItem = { id: newId, title: '', company: '', location: '', from: '', to: '', description: '' };
+          break;
+        case 'education':
+          newItem = { id: newId, degree: '', university: '', location: '', year: '' };
+          break;
+        case 'skills':
+          newItem = { id: newId, text: '' };
+          break;
+        case 'certifications':
+          newItem = { id: newId, text: '' };
+          break;
+        case 'links':
+          newItem = { id: newId, text: '', url: '' };
+          break;
+        default: return prev;
+      }
+      return { ...prev, [section]: [...prev[section], newItem] };
+    });
+  };
+
+  const removeDynamicItem = (section, id) => {
+    setCvData(prev => ({
+      ...prev,
+      [section]: prev[section].filter(item => item.id !== id)
+    }));
+  };
+
+  const handleDownloadPdf = () => {
+    const element = document.getElementById('cv-preview');
+    const opt = {
       margin: 0,
-      filename: `${cv.name || 'cv'}_CV.pdf`,
+      filename: `${cvData.name.replace(' ', '_')}_CV.pdf`,
       image: { type: 'jpeg', quality: 0.98 },
       html2canvas: { scale: 2, useCORS: true },
-      jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
-    }).save();
+      jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
+    };
+    html2pdf().from(element).set(opt).save();
   };
 
-  // ─── AI Auto-Fill from PDF ────────────────────────────────────
-  const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+  const handlePdfImport = async (event) => {
+    const file = event.target.files[0];
     if (!file) return;
-    if (!window.confirm(lang === 'ar'
-      ? 'سيؤدي هذا إلى استبدال جميع البيانات الحالية. هل أنت متأكد؟'
-      : 'This will replace all current data. Are you sure?')
-    ) { e.target.value = ''; return; }
 
-    setIsImporting(true);
-    setImportStatus(lang === 'ar' ? '📄 جاري قراءة الملف...' : '📄 Parsing PDF...');
+    if (!window.confirm(t.importConfirm)) {
+        event.target.value = null;
+        return;
+    }
 
+    setImportStatus(t.parsingPdf);
     try {
-      (pdfjsLib as any).GlobalWorkerOptions.workerSrc =
-        'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.worker.js';
+        pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.worker.js`;
 
-      const buffer = await file.arrayBuffer();
-      const pdfDoc = await (pdfjsLib as any).getDocument(buffer).promise;
-      let fullText = '';
-      for (let i = 1; i <= pdfDoc.numPages; i++) {
-        const page = await pdfDoc.getPage(i);
-        const content = await page.getTextContent();
-        fullText += content.items.map((item: any) => item.str).join(' ') + '\n';
-      }
+        const reader = new FileReader();
+        reader.readAsArrayBuffer(file);
 
-      setImportStatus(lang === 'ar' ? '⏳ جاري استخراج البيانات...' : '⏳ Extracting data...');
+        reader.onload = async (e) => {
+            try {
+                const pdf = await pdfjsLib.getDocument(e.target.result).promise;
+                let fullText = '';
+                for (let i = 1; i <= pdf.numPages; i++) {
+                    const page = await pdf.getPage(i);
+                    const textContent = await page.getTextContent();
+                    fullText += textContent.items.map(item => item.str).join(' ') + '\n';
+                }
 
-      const apiKey = (import.meta as any).env.VITE_GEMINI_API_KEY;
-      const ai = new GoogleGenAI({ apiKey });
+                setImportStatus(t.analyzingCvContent);
 
-      const schema = {
-        type: Type.OBJECT,
-        properties: {
-          name: { type: Type.STRING },
-          jobTitle: { type: Type.STRING },
-          email: { type: Type.STRING },
-          phone: { type: Type.STRING },
-          address: { type: Type.STRING },
-          summary: { type: Type.STRING },
-          links: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { text: { type: Type.STRING }, url: { type: Type.STRING } } } },
-          experience: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { title: { type: Type.STRING }, company: { type: Type.STRING }, location: { type: Type.STRING }, from: { type: Type.STRING }, to: { type: Type.STRING }, description: { type: Type.STRING } } } },
-          education: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { degree: { type: Type.STRING }, university: { type: Type.STRING }, location: { type: Type.STRING }, year: { type: Type.STRING } } } },
-          skills: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { text: { type: Type.STRING } } } },
-          certifications: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { text: { type: Type.STRING } } } },
-        },
-      };
+                const prompt = `You are an expert CV and resume parser. Analyze the following text extracted from a CV PDF and convert it into a structured JSON object. Extract all relevant information accurately. If a section is not present, return an empty string or empty array for it. Return ONLY raw JSON, no markdown blocks. CV Text:\n\n${fullText}`;
 
-      const res = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: `You are an expert CV parser. Extract all data from the following CV text into the provided JSON schema. If a field is not found, return an empty string or empty array.\n\nCV Text:\n\n${fullText}`,
-        config: { responseMimeType: 'application/json', responseSchema: schema },
-      });
+                const responseFetch = await fetch('/api/ai/proxy', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ contents: prompt })
+                });
 
-      const parsed = JSON.parse(res.text?.trim() || '{}');
-      const stamp = (arr: any[]) => (arr || []).map((item: any, i: number) => ({ ...item, id: i + 1 }));
-      setCv({
-        name: parsed.name || '',
-        jobTitle: parsed.jobTitle || '',
-        email: parsed.email || '',
-        phone: parsed.phone || '',
-        address: parsed.address || '',
-        summary: parsed.summary || '',
-        links: stamp(parsed.links),
-        experience: stamp(parsed.experience),
-        education: stamp(parsed.education),
-        skills: stamp(parsed.skills),
-        certifications: stamp(parsed.certifications),
-      });
+                if (!responseFetch.ok) throw new Error('AI analysis failed');
+                
+                const responseData = await responseFetch.json();
+                const response = { text: responseData.text };
 
-      setImportStatus(lang === 'ar' ? '✅ تم الملء تلقائياً بنجاح!' : '✅ Auto-filled successfully!');
-      setTimeout(() => setImportStatus(''), 4000);
+                let jsonText = response.text.trim();
+                if (jsonText.startsWith("```json")) {
+                    jsonText = jsonText.substring(7, jsonText.length - 3).trim();
+                }
+
+                const parsedData = JSON.parse(jsonText);
+                const processedData = {
+                    ...structuredClone(initialCvData), ...parsedData,
+                    experience: (parsedData.experience || []).map((item, index) => ({ ...item, id: index + 1 })),
+                    education: (parsedData.education || []).map((item, index) => ({ ...item, id: index + 1 })),
+                    skills: (parsedData.skills || []).map((item, index) => ({ ...item, id: index + 1 })),
+                    certifications: (parsedData.certifications || []).map((item, index) => ({ ...item, id: index + 1 })),
+                    links: (parsedData.links || []).map((item, index) => ({ ...item, id: index + 1 })),
+                };
+                setCvData(processedData);
+                setImportStatus(t.importSuccess);
+                setTimeout(() => setImportStatus(''), 3000);
+            } catch (err) {
+                console.error("Error during PDF processing or AI analysis:", err);
+                setImportStatus(t.importError);
+                setTimeout(() => setImportStatus(''), 5000);
+            } finally {
+                 event.target.value = null;
+            }
+        };
+        reader.onerror = () => { throw new Error("FileReader error"); };
     } catch (err) {
-      console.error(err);
-      setImportStatus(lang === 'ar' ? '❌ فشل استخراج البيانات.' : '❌ Failed to extract data.');
-      setTimeout(() => setImportStatus(''), 5000);
-    } finally {
-      setIsImporting(false);
-      e.target.value = '';
+        console.error("Error setting up PDF import:", err);
+        setImportStatus(t.importError);
+        setTimeout(() => setImportStatus(''), 5000);
+        event.target.value = null;
     }
   };
 
-  // ─── UI helpers ────────────────────────────────────────────
-  const ar = lang === 'ar';
-  const lbl = (a: string, e: string) => ar ? a : e;
-
   return (
-    <div className={`flex flex-col min-h-screen bg-gray-50 dark:bg-gray-900 ${ar ? 'font-[Tajawal]' : ''}`} dir={ar ? 'rtl' : 'ltr'}>
-
-      {/* ── Top Toolbar ── */}
-      <div className="bg-white dark:bg-slate-900 border-b border-gray-200 dark:border-slate-800 text-gray-900 dark:text-gray-100 px-6 py-3 flex flex-wrap items-center justify-between gap-3 shadow-md z-10 relative">
-        <div className="flex items-center gap-3">
-          <button onClick={() => navigate('/dashboard')} className="text-gray-500 hover:text-indigo-600 dark:text-gray-400 dark:hover:text-indigo-400 text-sm font-medium transition-colors">
-            ← {lbl('الرئيسية', 'Dashboard')}
-          </button>
-          <span className="text-gray-300 dark:text-slate-700">|</span>
-          <h1 className="font-bold text-lg">{lbl('منشئ السيرة الذاتية', 'CV Builder')}</h1>
+    <React.Fragment>
+      <GuideModal isVisible={isGuideVisible} onClose={() => setGuideVisible(false)} t={t} />
+      <CVStrengthTesterModal isVisible={isTesterVisible} onClose={() => setTesterVisible(false)} t={t} cvData={cvData} />
+      <ImportStatusModal status={importStatus} />
+      <header>
+        <h1>{t.headerTitle}</h1>
+        <div className="header-controls">
+            <input
+                type="file"
+                ref={fileInputRef}
+                onChange={handlePdfImport}
+                accept="application/pdf"
+                style={{ display: 'none' }}
+                aria-hidden="true"
+            />
+            <button className="import-btn" onClick={() => fileInputRef.current.click()} disabled={!!importStatus}>
+                {importStatus ? t.importing : t.importFromPdf}
+            </button>
+            <button className="header-btn" onClick={() => setGuideVisible(true)}>{t.guide}</button>
+            <button className="header-btn" onClick={() => setTesterVisible(true)}>{t.cvStrengthTest}</button>
+            <button className="header-btn" onClick={toggleLanguage}>{t.switchLang}</button>
+            <button className="download-btn" onClick={handleDownloadPdf}>{t.downloadPdf}</button>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <input type="file" ref={fileRef} accept="application/pdf" onChange={handleImport} className="hidden" />
-          <button
-            onClick={() => fileRef.current?.click()}
-            disabled={isImporting}
-            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white disabled:opacity-60 rounded-lg text-sm font-semibold shadow-sm transition"
-          >
-            {isImporting ? (ar ? 'جاري الاستيراد...' : 'Importing...') : lbl('استخراج من ملف', 'Import from PDF')}
-          </button>
-          <button onClick={handleDownload} className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-semibold shadow-sm transition">
-            {lbl('تحميل PDF', 'Download PDF')}
-          </button>
-        </div>
-      </div>
-
-      {/* ── Import Status Banner ── */}
-      {importStatus && (
-        <div className="bg-indigo-600 text-white text-center text-sm font-medium py-2 px-4">
-          {importStatus}
-        </div>
-      )}
-
-      {/* ── Main 2-col Layout ── */}
-      <div className="flex flex-1 overflow-hidden">
-
-        {/* LEFT: Form Panel */}
-        <div className="w-1/2 overflow-y-auto p-6 bg-white dark:bg-slate-900 border-e border-gray-200 dark:border-slate-700 space-y-6">
-
-          {/* Layout Options */}
-          <Section title={lbl('خيارات التنسيق', 'Layout Options')}>
-            <div className="flex flex-wrap gap-6">
-              <div>
-                <p className="text-sm font-medium mb-2 text-gray-700 dark:text-gray-300">{lbl('حجم الصفحة', 'Page Layout')}</p>
-                <div className="flex gap-4">
-                  {(['auto', 'one-page'] as const).map(v => (
-                    <label key={v} className="flex items-center gap-2 cursor-pointer text-sm">
-                      <input type="radio" checked={pageLayout === v} onChange={() => setPageLayout(v)} />
-                      {v === 'auto' ? lbl('تلقائي (متعدد)', 'Auto Multi-page') : lbl('صفحة واحدة', 'One Page')}
-                    </label>
-                  ))}
+      </header>
+      <div className="main-container">
+        <div className="cv-form">
+          <FormSection title={t.layoutOptions}>
+            <div className="layout-controls">
+              <div className="input-group">
+                <label>{t.pageLayout}</label>
+                <div className="radio-group">
+                  <label>
+                    <input
+                      type="radio"
+                      name="pageLayout"
+                      value="auto"
+                      checked={pageLayout === 'auto'}
+                      onChange={e => setSettings(s => ({ ...s, pageLayout: e.target.value }))}
+                    />
+                    {t.autoMultiPage}
+                  </label>
+                  <label>
+                    <input
+                      type="radio"
+                      name="pageLayout"
+                      value="one-page"
+                      checked={pageLayout === 'one-page'}
+                      onChange={e => setSettings(s => ({ ...s, pageLayout: e.target.value }))}
+                    />
+                    {t.onePage}
+                  </label>
+                  <label>
+                    <input
+                      type="radio"
+                      name="pageLayout"
+                      value="two-pages"
+                      checked={pageLayout === 'two-pages'}
+                      onChange={e => setSettings(s => ({ ...s, pageLayout: e.target.value }))}
+                    />
+                    {t.twoPages}
+                  </label>
                 </div>
               </div>
-              <div className="flex-1 min-w-40">
-                <label className="text-sm font-medium text-gray-700 dark:text-gray-300 block mb-2">
-                  {lbl('حجم الخط', 'Font Size')}: {fontSize}pt
-                </label>
-                <input type="range" min={8} max={14} step={0.5} value={fontSize}
+              <div className="input-group">
+                <label htmlFor="font-size-slider">{t.fontSize}: {fontSize}pt</label>
+                <input
+                  id="font-size-slider"
+                  type="range"
+                  min="8"
+                  max="14"
+                  step="0.5"
+                  value={fontSize}
                   disabled={pageLayout === 'auto'}
-                  onChange={e => setFontSize(parseFloat(e.target.value))}
-                  className="w-full accent-indigo-600 disabled:opacity-40" />
+                  onChange={e => setSettings(s => ({ ...s, fontSize: parseFloat(e.target.value) }))}
+                />
               </div>
             </div>
-          </Section>
 
-          {/* Personal Info */}
-          <Section title={lbl('المعلومات الشخصية', 'Personal Information')}>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <Field label={lbl('الاسم الكامل', 'Full Name')} value={cv.name} onChange={v => setField('name', v)} />
-              <Field label={lbl('المسمى الوظيفي', 'Job Title')} value={cv.jobTitle} onChange={v => setField('jobTitle', v)} />
-              <Field label={lbl('البريد', 'Email')} type="email" value={cv.email} onChange={v => setField('email', v)} />
-              <Field label={lbl('الهاتف', 'Phone')} value={cv.phone} onChange={v => setField('phone', v)} />
-              <Field label={lbl('العنوان', 'Address')} value={cv.address} onChange={v => setField('address', v)} cls="sm:col-span-2" />
+            {/* Section Visibility & Order */}
+            <div className="section-controls-wrapper">
+              <label className="section-controls-label">{t.sectionVisibility}</label>
+              <div className="section-controls-list">
+                {(sections || DEFAULT_SECTIONS).map((sec, index) => (
+                  <div
+                    key={sec.key}
+                    className={`section-control-item${dragOverKey === sec.key ? ' drag-over' : ''}`}
+                    draggable
+                    onDragStart={e => handleDragStart(e, index)}
+                    onDragOver={e => { e.preventDefault(); setDragOverKey(sec.key); }}
+                    onDragLeave={() => setDragOverKey(null)}
+                    onDrop={e => handleDrop(e, index)}
+                  >
+                    <span className="drag-handle" title={t.sectionOrder}>⠿</span>
+                    <label className="section-toggle">
+                      <input
+                        type="checkbox"
+                        checked={sec.visible}
+                        onChange={() => toggleSectionVisibility(sec.key)}
+                      />
+                      <span className="toggle-slider"></span>
+                    </label>
+                    <span className={`section-name${!sec.visible ? ' section-name-hidden' : ''}`}>
+                      {language === 'ar' ? sec.labelAr : sec.labelEn}
+                    </span>
+                    <div className="order-btns">
+                      <button className="order-btn" onClick={() => moveSectionUp(index)} disabled={index === 0} title="Move up">{t.moveUp}</button>
+                      <button className="order-btn" onClick={() => moveSectionDown(index)} disabled={index === (sections || DEFAULT_SECTIONS).length - 1} title="Move down">{t.moveDown}</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
-          </Section>
+          </FormSection>
 
-          {/* Links */}
-          <Section title={lbl('الروابط', 'Links')}>
-            {cv.links.map(l => (
-              <div key={l.id}>
-                <DynItem onRemove={() => removeItem('links', l.id)} removeLabel={lbl('حذف', 'Remove')}>
-                  <div className="grid grid-cols-2 gap-3">
-                    <Field label={lbl('النص', 'Display Text')} value={l.text} onChange={v => updateItem<LinkItem>('links', l.id, 'text', v)} />
-                    <Field label="URL" type="url" value={l.url} onChange={v => updateItem<LinkItem>('links', l.id, 'url', v)} />
-                  </div>
-                </DynItem>
+          <FormSection title={t.personalInfo}>
+            <InputField label={t.fullName} name="name" value={cvData.name} onChange={handleChange} />
+            <InputField label={t.jobTitle} name="jobTitle" value={cvData.jobTitle} onChange={handleChange} />
+            <InputField label={t.email} name="email" value={cvData.email} onChange={handleChange} type="email" />
+            <InputField label={t.phone} name="phone" value={cvData.phone} onChange={handleChange} />
+            <InputField label={t.address} name="address" value={cvData.address} onChange={handleChange} />
+          </FormSection>
+
+          <FormSection title={t.links}>
+            {(cvData.links || []).map(link => (
+              <div key={link.id} className="dynamic-item">
+                <InputField label={t.displayText} name="text" value={link.text} onChange={(e) => handleDynamicChange('links', link.id, e)} />
+                <InputField label={t.url} name="url" value={link.url} onChange={(e) => handleDynamicChange('links', link.id, e)} type="url" />
+                <div className="dynamic-controls">
+                    <button className="remove-btn" onClick={() => removeDynamicItem('links', link.id)}>{t.remove}</button>
+                </div>
               </div>
             ))}
-            <AddBtn onClick={() => addItem('links')} label={lbl('+ إضافة رابط', '+ Add Link')} />
-          </Section>
+             <div className="dynamic-controls">
+                <button className="add-btn" onClick={() => addDynamicItem('links')}>{t.addLink}</button>
+            </div>
+          </FormSection>
+          
+          <FormSection title={t.professionalSummary}>
+             <TextAreaField label={t.summary} name="summary" value={cvData.summary} onChange={handleChange} />
+          </FormSection>
 
-          {/* Summary */}
-          <Section title={lbl('الملخص الاحترافي', 'Professional Summary')}>
-            <TextArea label={lbl('الملخص', 'Summary')} value={cv.summary} onChange={v => setField('summary', v)} rows={4} />
-          </Section>
-
-          {/* Experience */}
-          <Section title={lbl('الخبرة العملية', 'Work Experience')}>
-            {cv.experience.map(exp => (
-              <div key={exp.id}>
-                <DynItem onRemove={() => removeItem('experience', exp.id)} removeLabel={lbl('حذف', 'Remove')}>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <Field label={lbl('المسمى الوظيفي', 'Position')} value={exp.title} onChange={v => updateItem<ExpItem>('experience', exp.id, 'title', v)} />
-                    <Field label={lbl('الشركة', 'Company')} value={exp.company} onChange={v => updateItem<ExpItem>('experience', exp.id, 'company', v)} />
-                    <Field label={lbl('الموقع', 'Location')} value={exp.location} onChange={v => updateItem<ExpItem>('experience', exp.id, 'location', v)} />
-                    <Field label={lbl('من', 'From')} value={exp.from} onChange={v => updateItem<ExpItem>('experience', exp.id, 'from', v)} />
-                    <Field label={lbl('إلى', 'To')} value={exp.to} onChange={v => updateItem<ExpItem>('experience', exp.id, 'to', v)} />
-                    <TextArea label={lbl('الوصف', 'Description')} value={exp.description} onChange={v => updateItem<ExpItem>('experience', exp.id, 'description', v)} cls="sm:col-span-2" />
-                  </div>
-                </DynItem>
+          <FormSection title={t.workExperience}>
+            {cvData.experience.map(exp => (
+              <div key={exp.id} className="dynamic-item">
+                <InputField label={t.position} name="title" value={exp.title} onChange={(e) => handleDynamicChange('experience', exp.id, e)} />
+                <InputField label={t.company} name="company" value={exp.company} onChange={(e) => handleDynamicChange('experience', exp.id, e)} />
+                <InputField label={t.location} name="location" value={exp.location} onChange={(e) => handleDynamicChange('experience', exp.id, e)} />
+                <InputField label={t.from} name="from" value={exp.from} onChange={(e) => handleDynamicChange('experience', exp.id, e)} />
+                <InputField label={t.to} name="to" value={exp.to} onChange={(e) => handleDynamicChange('experience', exp.id, e)} />
+                <TextAreaField label={t.description} name="description" value={exp.description} onChange={(e) => handleDynamicChange('experience', exp.id, e)} />
+                <div className="dynamic-controls">
+                    <button className="remove-btn" onClick={() => removeDynamicItem('experience', exp.id)}>{t.remove}</button>
+                </div>
               </div>
             ))}
-            <AddBtn onClick={() => addItem('experience')} label={lbl('+ إضافة خبرة', '+ Add Experience')} />
-          </Section>
+             <div className="dynamic-controls">
+                <button className="add-btn" onClick={() => addDynamicItem('experience')}>{t.addExperience}</button>
+            </div>
+          </FormSection>
 
-          {/* Education */}
-          <Section title={lbl('التعليم', 'Education')}>
-            {cv.education.map(edu => (
-              <div key={edu.id}>
-                <DynItem onRemove={() => removeItem('education', edu.id)} removeLabel={lbl('حذف', 'Remove')}>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <Field label={lbl('الشهادة', 'Degree')} value={edu.degree} onChange={v => updateItem<EduItem>('education', edu.id, 'degree', v)} />
-                    <Field label={lbl('الجامعة', 'University')} value={edu.university} onChange={v => updateItem<EduItem>('education', edu.id, 'university', v)} />
-                    <Field label={lbl('الموقع', 'Location')} value={edu.location} onChange={v => updateItem<EduItem>('education', edu.id, 'location', v)} />
-                    <Field label={lbl('سنة التخرج', 'Graduation Year')} value={edu.year} onChange={v => updateItem<EduItem>('education', edu.id, 'year', v)} />
-                  </div>
-                </DynItem>
+          <FormSection title={t.education}>
+            {cvData.education.map(edu => (
+              <div key={edu.id} className="dynamic-item">
+                <InputField label={t.degree} name="degree" value={edu.degree} onChange={(e) => handleDynamicChange('education', edu.id, e)} />
+                <InputField label={t.university} name="university" value={edu.university} onChange={(e) => handleDynamicChange('education', edu.id, e)} />
+                <InputField label={t.location} name="location" value={edu.location} onChange={(e) => handleDynamicChange('education', edu.id, e)} />
+                <InputField label={t.graduationYear} name="year" value={edu.year} onChange={(e) => handleDynamicChange('education', edu.id, e)} />
+                 <div className="dynamic-controls">
+                    <button className="remove-btn" onClick={() => removeDynamicItem('education', edu.id)}>{t.remove}</button>
+                </div>
               </div>
             ))}
-            <AddBtn onClick={() => addItem('education')} label={lbl('+ إضافة تعليم', '+ Add Education')} />
-          </Section>
-
-          {/* Skills */}
-          <Section title={lbl('المهارات', 'Skills')}>
-            {cv.skills.map(s => (
-              <div key={s.id}>
-                <DynItem onRemove={() => removeItem('skills', s.id)} removeLabel={lbl('حذف', 'Remove')}>
-                  <Field label={lbl('مهارة', 'Skill')} value={s.text} onChange={v => updateItem<SkillItem>('skills', s.id, 'text', v)} />
-                </DynItem>
-              </div>
+             <div className="dynamic-controls">
+                <button className="add-btn" onClick={() => addDynamicItem('education')}>{t.addEducation}</button>
+            </div>
+          </FormSection>
+          
+          <FormSection title={t.skills}>
+            {cvData.skills.map(skill => (
+                <div key={skill.id} className="dynamic-item">
+                    <InputField label={t.skill} name="text" value={skill.text} onChange={(e) => handleDynamicChange('skills', skill.id, e)} />
+                     <div className="dynamic-controls">
+                        <button className="remove-btn" onClick={() => removeDynamicItem('skills', skill.id)}>{t.remove}</button>
+                    </div>
+                </div>
             ))}
-            <AddBtn onClick={() => addItem('skills')} label={lbl('+ إضافة مهارة', '+ Add Skill')} />
-          </Section>
+            <div className="dynamic-controls">
+                 <button className="add-btn" onClick={() => addDynamicItem('skills')}>{t.addSkill}</button>
+            </div>
+          </FormSection>
 
-          {/* Certifications */}
-          <Section title={lbl('الشهادات والدورات', 'Certifications')}>
-            {cv.certifications.map(c => (
-              <div key={c.id}>
-                <DynItem onRemove={() => removeItem('certifications', c.id)} removeLabel={lbl('حذف', 'Remove')}>
-                  <Field label={lbl('شهادة', 'Certification')} value={c.text} onChange={v => updateItem<SkillItem>('certifications', c.id, 'text', v)} />
-                </DynItem>
-              </div>
+          <FormSection title={t.certifications}>
+            {cvData.certifications.map(cert => (
+                 <div key={cert.id} className="dynamic-item">
+                    <InputField label={t.certification} name="text" value={cert.text} onChange={(e) => handleDynamicChange('certifications', cert.id, e)} />
+                    <div className="dynamic-controls">
+                        <button className="remove-btn" onClick={() => removeDynamicItem('certifications', cert.id)}>{t.remove}</button>
+                    </div>
+                 </div>
             ))}
-            <AddBtn onClick={() => addItem('certifications')} label={lbl('+ إضافة شهادة', '+ Add Certification')} />
-          </Section>
+             <div className="dynamic-controls">
+                <button className="add-btn" onClick={() => addDynamicItem('certifications')}>{t.addCertification}</button>
+            </div>
+          </FormSection>
 
         </div>
-
-        {/* RIGHT: Preview Panel */}
-        <div className="w-1/2 overflow-y-auto bg-gray-200 dark:bg-gray-800 p-6 flex justify-center items-start">
-          <div className="transform origin-top scale-[0.6] lg:scale-[0.8] xl:scale-100 transition-transform">
-            <div
-              ref={previewRef}
-              id="cv-preview"
-              dir="ltr"
-              style={{
-                background: 'white',
-                width: '210mm',
-                minHeight: pageLayout === 'one-page' ? '297mm' : undefined,
-                maxHeight: pageLayout === 'one-page' ? '297mm' : undefined,
-                overflow: pageLayout === 'one-page' ? 'hidden' : undefined,
-                padding: '2cm',
-                boxShadow: '0 0 20px rgba(0,0,0,0.2)',
-                color: '#000',
-                fontFamily: "'Times New Roman', Times, serif",
-                lineHeight: 1.4,
-                fontSize: `${fontSize}pt`,
-              }}
-            >
-            {/* Header */}
-            <div style={{ textAlign: 'center', marginBottom: 20 }}>
-              <h1 style={{ fontSize: '2.5em', margin: 0, letterSpacing: 2, fontWeight: 700 }}>
-                {cv.name || (ar ? 'الاسم الكامل' : 'Full Name')}
-              </h1>
-              <p style={{ fontSize: '1.1em', margin: '5px 0', borderTop: '1px solid #000', borderBottom: '1px solid #000', padding: '5px 0' }}>
-                {cv.jobTitle || (ar ? 'المسمى الوظيفي' : 'Job Title')}
-              </p>
-              <p style={{ fontSize: '0.9em', marginTop: 10 }}>
-                {[cv.address, cv.email, cv.phone].filter(Boolean).join(' | ')}
-                {cv.links.filter(l => l.url).map(l => (
-                  <React.Fragment key={l.id}>{' | '}<a href={l.url.startsWith('http') ? l.url : `https://${l.url}`} style={{ color: 'inherit' }}>{l.text || l.url}</a></React.Fragment>
+        <div className="cv-preview-container">
+          <div 
+            id="cv-preview" 
+            className={[
+              language === 'ar' ? 'rtl-preview' : '',
+              pageLayout === 'one-page' ? 'one-page-layout' : '',
+              pageLayout === 'two-pages' ? 'two-pages-layout' : '',
+            ].filter(Boolean).join(' ')}
+            style={{ '--base-font-size': `${fontSize}pt` } as React.CSSProperties}
+          >
+            <div className="preview-header">
+              <h1>{cvData.name || t.fullName}</h1>
+              <p className="title">{cvData.jobTitle || t.jobTitle}</p>
+              <p className="preview-contact">
+                {cvData.address || t.address} | {cvData.email || t.email} | {cvData.phone || t.phone}
+                {(cvData.links || []).filter(l => l.url).map(link => (
+                    <React.Fragment key={link.id}>
+                        {' | '}
+                        <a href={!link.url.startsWith('http') ? `https://${link.url}` : link.url} target="_blank" rel="noopener noreferrer">
+                            {link.text || link.url}
+                        </a>
+                    </React.Fragment>
                 ))}
               </p>
             </div>
 
-            {/* Summary */}
-            {cv.summary && (
-              <PreviewSection title={ar ? "الملخص" : "Professional Summary"}>
-                <p style={{ textAlign: 'justify' }}>{cv.summary}</p>
-              </PreviewSection>
-            )}
+            {(sections || DEFAULT_SECTIONS).filter(sec => sec.visible).map(sec => {
+              if (sec.key === 'summary') return (
+                <div key="summary" className="preview-section">
+                  <h2>{t.professionalSummary}</h2>
+                  <div className="content">
+                    <p>{cvData.summary || t.preview_summary_placeholder}</p>
+                  </div>
+                </div>
+              );
+              if (sec.key === 'experience') return (
+                <div key="experience" className="preview-section">
+                  <h2>{t.workExperience}</h2>
+                  <div className="content">
+                    {cvData.experience.map(exp => (
+                      <div key={exp.id} className="experience-item">
+                        <div className="item-header">
+                          <span className="title">{exp.title || t.preview_job_title}</span>
+                          <span className="date">{exp.from || t.preview_from} – {exp.to || t.preview_to}</span>
+                        </div>
+                        <div className="item-subheader">{exp.company || t.preview_company}, {exp.location || t.preview_location}</div>
+                        <div className="item-description">
+                          <ul>
+                            {(exp.description || '').split('\n').filter(line => line.trim() !== '').map((line, i) => <li key={i}>{line.replace('•', '').trim()}</li>)}
+                          </ul>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+              if (sec.key === 'education') return (
+                <div key="education" className="preview-section">
+                  <h2>{t.education}</h2>
+                  <div className="content">
+                    {cvData.education.map(edu => (
+                      <div key={edu.id} className="education-item">
+                        <div className="item-header">
+                          <span className="degree">{edu.degree || t.preview_degree}</span>
+                          <span className="date">{t.preview_graduated}: {edu.year || t.preview_year}</span>
+                        </div>
+                        <div className="item-subheader">{edu.university || t.preview_university}, {edu.location || t.preview_location}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+              if (sec.key === 'skills') return (
+                <div key="skills" className="preview-section">
+                  <h2>{t.skills}</h2>
+                  <div className="content skills-list">
+                    <ul>
+                      {cvData.skills.map(skill => (
+                        <li key={skill.id}>{skill.text || t.preview_skill}</li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+              );
+              if (sec.key === 'certifications') return (
+                <div key="certifications" className="preview-section">
+                  <h2>{t.certifications}</h2>
+                  <div className="content certifications-list">
+                    <ul>
+                      {cvData.certifications.map(cert => (
+                        <li key={cert.id}>{cert.text || t.preview_certification}</li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+              );
+              return null;
+            })}
 
-            {/* Experience */}
-            {cv.experience.length > 0 && (
-              <PreviewSection title={ar ? "الخبرة العملية" : "Work Experience"}>
-                {cv.experience.map(exp => (
-                  <div key={exp.id} style={{ marginBottom: 14 }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 'bold' }}>
-                      <span>{exp.title || 'Position'}</span>
-                      <span style={{ fontStyle: 'italic', fontWeight: 'normal' }}>{exp.from} – {exp.to}</span>
+          </div>
+        </div>
+      </div>
+      <footer>
+        <p>{t.createdBy}</p>
+      </footer>
+    </React.Fragment>
+  );
+};
+
+
+const FormSection = ({ title, children }) => (
+  <div className="form-section">
+    <h2>{title}</h2>
+    {children}
+  </div>
+);
+
+const InputField = ({ label, ...props }) => (
+  <div className="input-group">
+    <label>{label}</label>
+    <input {...props} />
+  </div>
+);
+
+const TextAreaField = ({ label, ...props }) => (
+  <div className="input-group">
+    <label>{label}</label>
+    <textarea {...props}></textarea>
+  </div>
+);
+
+const GuideModal = ({ isVisible, onClose, t }) => {
+  if (!isVisible) return null;
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-content" onClick={e => e.stopPropagation()}>
+        <button className="modal-close-btn" onClick={onClose}>&times;</button>
+        <h3>{t.guideTitle}</h3>
+        <p>{t.guideIntro}</p>
+        
+        <h4>{t.guideStructureTitle}</h4>
+        <ul>
+            {t.guideStructure.map((item, index) => <li key={index}>{item}</li>)}
+        </ul>
+
+        <h4>{t.guideAtsTitle}</h4>
+        <ul>
+            {t.guideAts.map((item, index) => <li key={index}>{item}</li>)}
+        </ul>
+      </div>
+    </div>
+  );
+};
+
+const CVStrengthTesterModal = ({ isVisible, onClose, t, cvData }) => {
+  const [jobTitle, setJobTitle] = React.useState('');
+  const [isLoading, setIsLoading] = React.useState(false);
+  const [analysisResult, setAnalysisResult] = React.useState(null);
+  const [error, setError] = React.useState('');
+
+  const handleAnalyze = async () => {
+    if (!jobTitle.trim()) {
+      setError(t.errorEnterJobTitle);
+      return;
+    }
+    setError('');
+    setIsLoading(true);
+    setAnalysisResult(null);
+
+    try {
+      const prompt = `You are an expert ATS and career coach. Analyze the following CV against the job title "${jobTitle}". Provide a score from 0 to 100 and actionable suggestions for improvement. Return ONLY a JSON object with properties 'score' (integer) and 'suggestions' (array of strings), no markdown formatting. CV Text: ${cvText}`;
+
+      const responseFetch = await fetch('/api/ai/proxy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contents: prompt })
+      });
+      
+      if (!responseFetch.ok) throw new Error('AI analysis failed');
+      
+      const responseData = await responseFetch.json();
+      let jsonText = responseData.text;
+      if (jsonText.startsWith('```json')) jsonText = jsonText.replace(/^```json\n/, '').replace(/\n```$/, '');
+      else if (jsonText.startsWith('```')) jsonText = jsonText.replace(/^```\n/, '').replace(/\n```$/, '');
+
+      const jsonResponse = JSON.parse(jsonText);
+      setAnalysisResult(jsonResponse);
+
+    } catch (err) {
+      console.error("Error analyzing CV:", err);
+      setError(t.errorAnalysisFailed);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleClose = () => {
+    setJobTitle('');
+    setAnalysisResult(null);
+    setError('');
+    setIsLoading(false);
+    onClose();
+  };
+
+  if (!isVisible) return null;
+
+  return (
+    <div className="modal-overlay" onClick={handleClose}>
+      <div className="modal-content tester-modal-content" onClick={e => e.stopPropagation()}>
+        <button className="modal-close-btn" onClick={handleClose}>&times;</button>
+        <h3>{t.cvStrengthTest}</h3>
+        
+        {!analysisResult && (
+          <div className="tester-form">
+            <div className="input-group">
+                <label htmlFor="jobTitleInput">{t.enterJobTitle}</label>
+                <input 
+                    id="jobTitleInput"
+                    type="text" 
+                    value={jobTitle} 
+                    onChange={(e) => setJobTitle(e.target.value)} 
+                    placeholder="e.g., Senior Software Engineer"
+                    disabled={isLoading}
+                />
+            </div>
+            {error && <p className="tester-error">{error}</p>}
+            <button className="analyze-btn" onClick={handleAnalyze} disabled={isLoading}>
+              {isLoading ? t.analyzing : t.analyzeCv}
+            </button>
+          </div>
+        )}
+
+        {isLoading && <div className="loading-spinner"></div>}
+
+        {analysisResult && (
+          <div className="analysis-results">
+            <h4>{t.analysisResults}</h4>
+            <div className="results-grid">
+                <div className="score-container">
+                    <h5>{t.yourCvScore}</h5>
+                    {/* Fix: Cast style object to React.CSSProperties to allow for custom properties like '--score'. */}
+                    <div className="score-circle" style={{ '--score': analysisResult.score } as React.CSSProperties}>
+                      <span className="score-text">{analysisResult.score}%</span>
                     </div>
-                    <div style={{ fontStyle: 'italic', color: '#444' }}>{exp.company}{exp.location ? `, ${exp.location}` : ''}</div>
-                    {exp.description && (
-                      <ul style={{ listStyleType: 'disc', margin: '5px 0 0 20px', padding: 0 }}>
-                        {exp.description.split('\n').filter(l => l.trim()).map((line, i) => (
-                          <li key={i} style={{ marginBottom: 4 }}>{line.replace('•', '').trim()}</li>
+                </div>
+                <div className="suggestions-container">
+                    <h5>{t.suggestionsForImprovement}</h5>
+                    <ul className="suggestions-list">
+                        {analysisResult.suggestions.map((suggestion, index) => (
+                            <li key={index}>{suggestion}</li>
                         ))}
-                      </ul>
-                    )}
-                  </div>
-                ))}
-              </PreviewSection>
-            )}
-
-            {/* Education */}
-            {cv.education.length > 0 && (
-              <PreviewSection title={ar ? "التعليم" : "Education"}>
-                {cv.education.map(edu => (
-                  <div key={edu.id} style={{ marginBottom: 10 }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 'bold' }}>
-                      <span>{edu.degree}</span>
-                      <span style={{ fontStyle: 'italic', fontWeight: 'normal' }}>Graduated: {edu.year}</span>
-                    </div>
-                    <div style={{ fontStyle: 'italic', color: '#444' }}>{edu.university}{edu.location ? `, ${edu.location}` : ''}</div>
-                  </div>
-                ))}
-              </PreviewSection>
-            )}
-
-            {/* Skills */}
-            {cv.skills.length > 0 && (
-              <PreviewSection title={ar ? "المهارات" : "Skills"}>
-                <ul style={{ listStyleType: 'disc', marginLeft: 20 }}>
-                  {cv.skills.map(s => <li key={s.id} style={{ marginBottom: 3 }}>{s.text}</li>)}
-                </ul>
-              </PreviewSection>
-            )}
-
-            {/* Certifications */}
-            {cv.certifications.length > 0 && (
-              <PreviewSection title={ar ? "الشهادات والدورات" : "Certifications"}>
-                <ul style={{ listStyleType: 'disc', marginLeft: 20 }}>
-                  {cv.certifications.map(c => <li key={c.id} style={{ marginBottom: 3 }}>{c.text}</li>)}
-                </ul>
-              </PreviewSection>
-            )}
+                    </ul>
+                </div>
+            </div>
+             <button className="analyze-btn" onClick={handleClose}>Close</button>
           </div>
-          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+const ImportStatusModal = ({ status }) => {
+    if (!status) return null;
+
+    const isProcessing = status.includes('...') || status.includes('جاري');
+
+    return (
+        <div className="import-modal-overlay">
+            <div className="import-modal-content">
+                {isProcessing && <div className="loading-spinner"></div>}
+                <p>{status}</p>
+            </div>
         </div>
+    );
+};
 
-      </div>
-    </div>
-  );
-}
 
-// ─── Sub-components ──────────────────────────────────────────
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div className="bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-xl p-5 shadow-sm">
-      <h2 className="text-base font-bold text-gray-800 dark:text-gray-100 mb-4 pb-2 border-b border-indigo-200 dark:border-indigo-800">{title}</h2>
-      {children}
-    </div>
-  );
-}
-
-function Field({ label, value, onChange, type = 'text', cls = '' }: {
-  label: string; value: string; onChange: (v: string) => void; type?: string; cls?: string;
-}) {
-  return (
-    <div className={cls}>
-      <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">{label}</label>
-      <input
-        type={type}
-        value={value}
-        onChange={e => onChange(e.target.value)}
-        className="w-full border-2 border-black dark:border-white rounded-lg px-3 py-2 text-sm bg-gray-50 focus:bg-white dark:bg-slate-900 dark:focus:bg-slate-950 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition shadow-sm"
-      />
-    </div>
-  );
-}
-
-function TextArea({ label, value, onChange, rows = 3, cls = '' }: {
-  label: string; value: string; onChange: (v: string) => void; rows?: number; cls?: string;
-}) {
-  return (
-    <div className={cls}>
-      <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">{label}</label>
-      <textarea
-        value={value}
-        rows={rows}
-        onChange={e => onChange(e.target.value)}
-        className="w-full border-2 border-black dark:border-white rounded-lg px-3 py-2 text-sm bg-gray-50 focus:bg-white dark:bg-slate-900 dark:focus:bg-slate-950 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none resize-vertical transition shadow-sm"
-      />
-    </div>
-  );
-}
-
-function DynItem({ children, onRemove, removeLabel }: { children: React.ReactNode; onRemove: () => void; removeLabel: string }) {
-  return (
-    <div className="border border-gray-200 dark:border-slate-700 rounded-lg p-4 mb-3 bg-gray-50 dark:bg-slate-800/50 space-y-3">
-      {children}
-      <div className="flex justify-end">
-        <button onClick={onRemove} className="text-xs text-red-500 hover:text-red-700 font-semibold px-3 py-1 border border-red-300 hover:border-red-500 rounded-lg transition">
-          🗑 {removeLabel}
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function AddBtn({ onClick, label }: { onClick: () => void; label: string }) {
-  return (
-    <button onClick={onClick} className="w-full mt-2 py-2 border-2 border-dashed border-indigo-300 dark:border-indigo-700 text-indigo-600 dark:text-indigo-400 hover:border-indigo-500 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 rounded-lg text-sm font-semibold transition">
-      {label}
-    </button>
-  );
-}
-
-function PreviewSection({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div style={{ marginBottom: 20 }}>
-      <h2 style={{ fontSize: '1.27em', fontWeight: 700, borderBottom: '2px solid #000', paddingBottom: 5, marginBottom: 10, letterSpacing: 1 }}>
-        {title}
-      </h2>
-      {children}
-    </div>
-  );
-}
+export default App;

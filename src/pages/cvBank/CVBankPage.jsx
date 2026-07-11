@@ -1322,10 +1322,15 @@ ${JSON.stringify(candidatesToScore, null, 2)}
         <div class="top-controls">
           <div class="control-section">
             <h3>${T.uploadHeader}</h3>
-            <div class=${`dropzone ${isDragging ? 'drag-over' : ''}`} onDragOver=${handleDragEvents} onDragLeave=${handleDragEvents} onDrop=${onDrop} onClick=${() => document.getElementById('file-upload').click()}>
+            <div class=${`dropzone ${isDragging ? 'drag-over' : ''}`} onDragOver=${handleDragEvents} onDragLeave=${handleDragEvents} onDrop=${onDrop}>
               <input type="file" id="file-upload" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.zip" onChange=${onFileChange} style=${{ display: 'none' }} />
+              <input type="file" id="folder-upload" webkitdirectory directory multiple onChange=${onFileChange} style=${{ display: 'none' }} />
               <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M12 16.5V9.75m0 0l-3.75 3.75M12 9.75l3.75 3.75M3 17.25V8.25c0-1.12.93-2.25 2.25-2.25h13.5c1.12 0 2.25 1.017 2.25 2.25v9c0 1.12-.93 2.25-2.25-2.25H5.25c-1.12 0-2.25-1.017-2.25-2.25z" /></svg>
               <p>${T.dropzoneText}</p>
+              <div style=${{ display: 'flex', gap: '10px', justifyContent: 'center', margin: '15px 0' }}>
+                <button class="action-btn" onClick=${(e) => { e.stopPropagation(); document.getElementById('file-upload').click(); }}>ملفات</button>
+                <button class="action-btn" onClick=${(e) => { e.stopPropagation(); document.getElementById('folder-upload').click(); }}>مجلد كامل</button>
+              </div>
               <p><small>${T.supportedFormats}</small></p>
             </div>
             <${UploadQueue} />

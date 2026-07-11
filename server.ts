@@ -252,35 +252,84 @@ Make it well-structured, professional, and ready to export as PDF.`,
     }
   );
 
-  // ─── AI Proxy Route (HR only) - Replaces client-side Gemini calls ──────────
+  // ─── AI Proxy Route — dynamic provider from DB (HR/admin only) ──────────────
   app.post(
     "/api/ai/proxy",
     requireAuth,
-    requireRole("hr", "admin"),
+    requireRole("hr", "admin", "job_seeker"),
     rateLimit,
     async (req: Request, res: Response) => {
       try {
         const params = req.body;
-        if (!params || !params.model || !params.contents) {
-          return res.status(400).json({ error: "معلمات غير صالحة." });
-        }
-
-        const ALLOWED_MODELS = ["gemini-2.5-flash"];
-        if (!ALLOWED_MODELS.includes(params.model)) {
-          return res.status(400).json({ error: "model غير مسموح" });
+        if (!params || !params.contents) {
+          return res.status(400).json({ error: "معلمات غير صالحة — contents مطلوب." });
         }
         if (JSON.stringify(params.contents).length > 20000) {
-          return res.status(400).json({ error: "الطلب أكبر من المسموح" });
+          return res.status(400).json({ error: "الطلب أكبر من المسموح (20,000 حرف)." });
         }
+
+        // ── Load active provider from DB ────────────────────────────────────────
+        const { data: providerRow, error: provErr } = await supabaseAdmin
+          .from("ai_providers")
+          .select("name, base_url, model, api_key")
+          .eq("is_active", true)
+          .limit(1)
+          .maybeSingle();
 
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 60_000);
 
         try {
-          const ai = getAI();
-          const response = await ai.models.generateContent(params);
+          let responseText: string;
+
+          if (!provErr && providerRow && providerRow.base_url && providerRow.api_key) {
+            // ── OpenAI-compatible provider (e.g. dahl.global, Kimi K2, etc.) ─
+            const model = params.model || providerRow.model;
+            const baseUrl = providerRow.base_url.replace(/\/$/, "");
+
+            // Normalise contents → OpenAI messages format
+            let messages: { role: string; content: string }[];
+            if (Array.isArray(params.contents)) {
+              messages = params.contents.map((c: any) => ({
+                role: c.role === "model" ? "assistant" : (c.role || "user"),
+                content: typeof c.parts?.[0]?.text === "string"
+                  ? c.parts[0].text
+                  : (typeof c === "string" ? c : JSON.stringify(c)),
+              }));
+            } else {
+              messages = [{ role: "user", content: String(params.contents) }];
+            }
+
+            const fetchRes = await fetch(`${baseUrl}/chat/completions`, {
+              method: "POST",
+              signal: controller.signal,
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${providerRow.api_key}`,
+              },
+              body: JSON.stringify({
+                model,
+                messages,
+                ...(params.config?.maxOutputTokens ? { max_tokens: params.config.maxOutputTokens } : {}),
+              }),
+            });
+
+            if (!fetchRes.ok) {
+              const errBody = await fetchRes.text();
+              throw new Error(`[${providerRow.name}] HTTP ${fetchRes.status}: ${errBody.slice(0, 200)}`);
+            }
+
+            const data = await fetchRes.json();
+            responseText = data.choices?.[0]?.message?.content ?? "";
+          } else {
+            // ── Fallback: Gemini SDK ────────────────────────────────────────────
+            const ai = getAI();
+            const response = await ai.models.generateContent(params);
+            responseText = response.text ?? "";
+          }
+
           clearTimeout(timeout);
-          res.json({ text: response.text });
+          res.json({ text: responseText });
         } catch (err: any) {
           clearTimeout(timeout);
           if (err.name === "AbortError") {
@@ -290,11 +339,8 @@ Make it well-structured, professional, and ready to export as PDF.`,
         }
       } catch (err: any) {
         const status = err.status || 500;
-        const isInvalidKey = err.message?.includes("API key not valid") || err.message?.includes("API_KEY_INVALID");
         res.status(status).json({
-          error: isInvalidKey
-            ? "مفتاح Gemini غير صحيح."
-            : err.message || "فشل في معالجة طلب الذكاء الاصطناعي.",
+          error: err.message || "فشل في معالجة طلب الذكاء الاصطناعي.",
         });
       }
     }
@@ -670,6 +716,296 @@ Return a JSON array: [{"id": "...", "score": 0-100, "reason": "one sentence"}]`,
         const status = err.status || 500;
         res.status(status).json({ error: err.message || "فشل في تحديث الاشتراك." });
       }
+    }
+  );
+
+  // ─── Admin API — AI Providers CRUD ───────────────────────────────────────
+  // GET: list providers (api_key NEVER returned to client)
+  app.get(
+    "/api/admin/ai-providers",
+    requireAuth,
+    requireRole("admin"),
+    async (_req: Request, res: Response) => {
+      const { data, error } = await supabaseAdmin
+        .from("ai_providers")
+        .select("id, name, base_url, model, is_active, created_at")
+        .order("created_at", { ascending: true });
+      if (error) return res.status(500).json({ error: error.message });
+      res.json(data || []);
+    }
+  );
+
+  // POST: create provider
+  app.post(
+    "/api/admin/ai-providers",
+    requireAuth,
+    requireRole("admin"),
+    async (req: Request, res: Response) => {
+      try {
+        const name = validateString(req.body?.name, "name", 100);
+        const base_url = validateString(req.body?.base_url, "base_url", 500);
+        const model = validateString(req.body?.model, "model", 200);
+        const api_key = validateString(req.body?.api_key, "api_key", 500);
+        const is_active = req.body?.is_active === true || req.body?.is_active === "true";
+
+        // If setting as active, deactivate all others first
+        if (is_active) {
+          await supabaseAdmin.from("ai_providers").update({ is_active: false }).neq("id", 0);
+        }
+
+        const { data, error } = await supabaseAdmin
+          .from("ai_providers")
+          .insert([{ name, base_url, model, api_key, is_active }])
+          .select("id, name, base_url, model, is_active, created_at")
+          .single();
+        if (error) return res.status(500).json({ error: error.message });
+        res.status(201).json(data);
+      } catch (err: any) {
+        res.status(err.status || 500).json({ error: err.message });
+      }
+    }
+  );
+
+  // PATCH: update provider (can update any field including api_key)
+  app.patch(
+    "/api/admin/ai-providers/:id",
+    requireAuth,
+    requireRole("admin"),
+    async (req: Request, res: Response) => {
+      try {
+        const id = parseInt(req.params.id, 10);
+        if (isNaN(id)) return res.status(400).json({ error: "id غير صالح." });
+
+        const updates: Record<string, any> = {};
+        if (req.body?.name !== undefined) updates.name = validateString(req.body.name, "name", 100);
+        if (req.body?.base_url !== undefined) updates.base_url = validateString(req.body.base_url, "base_url", 500);
+        if (req.body?.model !== undefined) updates.model = validateString(req.body.model, "model", 200);
+        if (req.body?.api_key !== undefined && req.body.api_key !== "") {
+          updates.api_key = validateString(req.body.api_key, "api_key", 500);
+        }
+        if (req.body?.is_active !== undefined) {
+          updates.is_active = req.body.is_active === true || req.body.is_active === "true";
+          // Deactivate all others before activating this one
+          if (updates.is_active) {
+            await supabaseAdmin.from("ai_providers").update({ is_active: false }).neq("id", id);
+          }
+        }
+
+        updates.updated_at = new Date().toISOString();
+
+        const { error } = await supabaseAdmin.from("ai_providers").update(updates).eq("id", id);
+        if (error) return res.status(500).json({ error: error.message });
+        res.json({ ok: true });
+      } catch (err: any) {
+        res.status(err.status || 500).json({ error: err.message });
+      }
+    }
+  );
+
+  // DELETE: remove provider
+  app.delete(
+    "/api/admin/ai-providers/:id",
+    requireAuth,
+    requireRole("admin"),
+    async (req: Request, res: Response) => {
+      const id = parseInt(req.params.id, 10);
+      if (isNaN(id)) return res.status(400).json({ error: "id غير صالح." });
+      const { error } = await supabaseAdmin.from("ai_providers").delete().eq("id", id);
+      if (error) return res.status(500).json({ error: error.message });
+      res.json({ ok: true });
+    }
+  );
+
+  // ─── Upload Links — HR Management (authenticated) ────────────────────────────
+  // GET all links for current HR user
+  app.get(
+    "/api/hr/upload-links",
+    requireAuth,
+    requireRole("hr", "admin"),
+    async (req: Request, res: Response) => {
+      const userId = (req as any).userId;
+      const { data, error } = await supabaseAdmin
+        .from("upload_links")
+        .select("id, token, label, expires_at, max_uses, use_count, is_locked, created_at")
+        .eq("hr_user_id", userId)
+        .order("created_at", { ascending: false });
+      if (error) return res.status(500).json({ error: error.message });
+      res.json(data || []);
+    }
+  );
+
+  // POST create a new upload link
+  app.post(
+    "/api/hr/upload-links",
+    requireAuth,
+    requireRole("hr", "admin"),
+    async (req: Request, res: Response) => {
+      const userId = (req as any).userId;
+      const label = req.body?.label ? validateString(req.body.label, "label", 200) : null;
+      const maxUses = Number(req.body?.max_uses) || 100;
+      const expiryDays = Number(req.body?.expiry_days) || 30;
+      const expiresAt = new Date(Date.now() + expiryDays * 86400_000).toISOString();
+
+      const { data, error } = await supabaseAdmin
+        .from("upload_links")
+        .insert([{ hr_user_id: userId, label, max_uses: maxUses, expires_at: expiresAt }])
+        .select("id, token, label, expires_at, max_uses, use_count, is_locked, created_at")
+        .single();
+      if (error) return res.status(500).json({ error: error.message });
+      res.status(201).json(data);
+    }
+  );
+
+  // PATCH lock/unlock a link
+  app.patch(
+    "/api/hr/upload-links/:id",
+    requireAuth,
+    requireRole("hr", "admin"),
+    async (req: Request, res: Response) => {
+      const userId = (req as any).userId;
+      const id = parseInt(req.params.id, 10);
+      if (isNaN(id)) return res.status(400).json({ error: "id غير صالح." });
+      const updates: any = {};
+      if (req.body?.is_locked !== undefined) updates.is_locked = Boolean(req.body.is_locked);
+      if (req.body?.max_uses !== undefined) updates.max_uses = Number(req.body.max_uses);
+      if (req.body?.label !== undefined) updates.label = req.body.label ? validateString(req.body.label, "label", 200) : null;
+      const { error } = await supabaseAdmin.from("upload_links").update(updates).eq("id", id).eq("hr_user_id", userId);
+      if (error) return res.status(500).json({ error: error.message });
+      res.json({ ok: true });
+    }
+  );
+
+  // DELETE a link
+  app.delete(
+    "/api/hr/upload-links/:id",
+    requireAuth,
+    requireRole("hr", "admin"),
+    async (req: Request, res: Response) => {
+      const userId = (req as any).userId;
+      const id = parseInt(req.params.id, 10);
+      if (isNaN(id)) return res.status(400).json({ error: "id غير صالح." });
+      const { error } = await supabaseAdmin.from("upload_links").delete().eq("id", id).eq("hr_user_id", userId);
+      if (error) return res.status(500).json({ error: error.message });
+      res.json({ ok: true });
+    }
+  );
+
+  // ─── Public Upload Link: GET info (no auth, validate token) ──────────────────
+  // Per-token rate limit map (separate from authenticated rate limit)
+  const publicUploadRateMap = new Map<string, { count: number; resetAt: number }>();
+
+  function publicUploadRateLimit(req: Request, res: Response, next: NextFunction) {
+    const ip = (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.socket.remoteAddress || "unknown";
+    const token = req.params.token || "";
+    const key = `${ip}:${token}`;
+    const now = Date.now();
+    const entry = publicUploadRateMap.get(key);
+    if (entry && now < entry.resetAt) {
+      if (entry.count >= 5) {
+        return res.status(429).json({ error: "تجاوزت الحد المسموح — انتظر دقيقة ثم حاول مجدداً." });
+      }
+      entry.count++;
+    } else {
+      publicUploadRateMap.set(key, { count: 1, resetAt: now + 60_000 });
+    }
+    next();
+  }
+
+  app.get(
+    "/api/upload-links/:token",
+    publicUploadRateLimit,
+    async (req: Request, res: Response) => {
+      const { token } = req.params;
+      const { data, error } = await supabaseAdmin
+        .from("upload_links")
+        .select("id, label, expires_at, max_uses, use_count, is_locked")
+        .eq("token", token)
+        .maybeSingle();
+
+      if (error || !data) return res.status(404).json({ error: "الرابط غير موجود." });
+      if (data.is_locked) return res.status(403).json({ error: "هذا الرابط مغلق من قِبل صاحبه." });
+      if (data.expires_at && new Date(data.expires_at) < new Date()) {
+        return res.status(410).json({ error: "انتهت صلاحية هذا الرابط." });
+      }
+      if (data.max_uses && data.use_count >= data.max_uses) {
+        return res.status(410).json({ error: "تجاوز الرابط الحد الأقصى لعدد الاستخدامات." });
+      }
+
+      res.json({ label: data.label, max_uses: data.max_uses, use_count: data.use_count, expires_at: data.expires_at });
+    }
+  );
+
+  // ─── Public Upload Link: POST upload (multipart/form-data, no auth) ──────────
+  // Uses multer in-memory (max 10MB) — validates type + size before Supabase upload
+  app.post(
+    "/api/upload-links/:token/upload",
+    publicUploadRateLimit,
+    express.raw({ type: ["application/pdf", "application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "multipart/form-data"], limit: "11mb" }),
+    async (req: Request, res: Response) => {
+      const { token } = req.params;
+
+      // Re-validate token
+      const { data: link, error: linkErr } = await supabaseAdmin
+        .from("upload_links")
+        .select("id, hr_user_id, is_locked, expires_at, max_uses, use_count")
+        .eq("token", token)
+        .maybeSingle();
+
+      if (linkErr || !link) return res.status(404).json({ error: "الرابط غير موجود." });
+      if (link.is_locked) return res.status(403).json({ error: "هذا الرابط مغلق." });
+      if (link.expires_at && new Date(link.expires_at) < new Date()) return res.status(410).json({ error: "انتهت صلاحية الرابط." });
+      if (link.max_uses && link.use_count >= link.max_uses) return res.status(410).json({ error: "تجاوز الرابط الحد الأقصى." });
+
+      // Parse multipart manually with busboy for security
+      const busboy = (await import("busboy")).default({ headers: req.headers, limits: { fileSize: 10 * 1024 * 1024 /* 10MB */ } });
+      let fileBuffer: Buffer | null = null;
+      let fileName = "upload";
+      let mimeType = "";
+      let fileTooLarge = false;
+
+      busboy.on("file", (_field: string, file: any, info: any) => {
+        fileName = info.filename || "upload";
+        mimeType = info.mimeType || "";
+        const chunks: Buffer[] = [];
+        file.on("data", (d: Buffer) => chunks.push(d));
+        file.on("limit", () => { fileTooLarge = true; file.resume(); });
+        file.on("end", () => { if (!fileTooLarge) fileBuffer = Buffer.concat(chunks); });
+      });
+
+      busboy.on("finish", async () => {
+        if (fileTooLarge) return res.status(413).json({ error: "حجم الملف يتجاوز الحد الأقصى (10 MB)." });
+        if (!fileBuffer) return res.status(400).json({ error: "لم يتم إرسال ملف." });
+
+        // Strict MIME + extension validation
+        const allowedMimes = [
+          "application/pdf",
+          "application/msword",
+          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ];
+        const allowedExts = [".pdf", ".doc", ".docx"];
+        const ext = "." + (fileName.split(".").pop() || "").toLowerCase();
+
+        if (!allowedMimes.includes(mimeType) || !allowedExts.includes(ext)) {
+          return res.status(400).json({ error: "نوع الملف غير مدعوم. يُقبل فقط PDF أو Word." });
+        }
+
+        // Upload to Supabase storage under upload-links/{token}/{timestamp}_{filename}
+        const safeFileName = `${Date.now()}_${fileName.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
+        const storagePath = `upload-links/${token}/${safeFileName}`;
+
+        const { error: uploadErr } = await supabaseAdmin.storage
+          .from("cv-bank")
+          .upload(storagePath, fileBuffer, { contentType: mimeType, upsert: false });
+
+        if (uploadErr) return res.status(500).json({ error: "فشل رفع الملف: " + uploadErr.message });
+
+        // Increment use_count atomically
+        await supabaseAdmin.rpc("increment_upload_link_use_count", { link_id: link.id });
+
+        res.json({ ok: true, path: storagePath });
+      });
+
+      req.pipe(busboy);
     }
   );
 

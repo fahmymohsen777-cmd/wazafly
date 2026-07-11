@@ -31,6 +31,7 @@ const ShortlistPage       = lazy(() => import('./pages/ShortlistPage'));
 const HrSettingsPage      = lazy(() => import('./pages/HrSettingsPage'));
 const JobSeekerSettingsPage = lazy(() => import('./pages/JobSeekerSettingsPage'));
 const CvBuilderPage       = lazy(() => import('./pages/CvBuilderPage'));
+const PublicUploadPage    = lazy(() => import('./pages/PublicUploadPage'));
 
 // ─── Page transition variants ─────────────────────────────────────────────────
 const pageVariants = {
@@ -331,6 +332,7 @@ function AnimatedRoutes({
         <Route path="/settings" element={<PageWrapper><JobSeekerSettingsPage session={session} profile={profile} /></PageWrapper>} />
         <Route path="/admin" element={<PageWrapper><AdminDashboardPage session={session} profile={profile} /></PageWrapper>} />
         <Route path="/cv-builder" element={<PageWrapper><CvBuilderPage session={session} profile={profile} /></PageWrapper>} />
+        <Route path="/upload/:token" element={<PageWrapper><PublicUploadPage /></PageWrapper>} />
       </Routes>
     </AnimatePresence>
   );

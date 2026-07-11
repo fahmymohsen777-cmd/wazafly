@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
-import { Users, Briefcase, UserCheck, CreditCard, CheckCircle, XCircle, Trash2, BarChart2 } from 'lucide-react';
+import { Users, Briefcase, UserCheck, CreditCard, CheckCircle, Trash2, BarChart2, Cpu, Plus, Eye, EyeOff, Edit2 } from 'lucide-react';
 import { useSettings } from '../contexts/SettingsContext';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts';
 
@@ -54,11 +54,20 @@ export default function AdminDashboardPage({ session, profile }: { session: any,
   const [topJobTitles, setTopJobTitles] = useState<any[]>([]);
   const [subStatusData, setSubStatusData] = useState<any[]>([]);
 
+  // AI Providers State
+  const [aiProviders, setAiProviders] = useState<any[]>([]);
+  const [aiProvidersLoading, setAiProvidersLoading] = useState(false);
+  const [aiProviderForm, setAiProviderForm] = useState({ name: '', base_url: '', model: '', api_key: '', is_active: false });
+  const [editingProviderId, setEditingProviderId] = useState<number | null>(null);
+  const [showApiKey, setShowApiKey] = useState(false);
+  const [aiProviderMsg, setAiProviderMsg] = useState('');
+
   useEffect(() => {
     if (!session) { navigate('/login'); return; }
     if (profile?.role === 'admin') {
       fetchData();
       fetchAnalytics();
+      fetchAiProviders();
     } else if (profile) {
       setLoading(false);
     }
@@ -103,6 +112,71 @@ export default function AdminDashboardPage({ session, profile }: { session: any,
       ]);
     } catch (e) { console.error(e); }
     finally { setAnalyticsLoading(false); }
+  };
+
+  // ─── AI Providers logic ─────────────────────────────────────────────────────
+  const fetchAiProviders = async () => {
+    setAiProvidersLoading(true);
+    try {
+      const data = await adminFetch('/api/admin/ai-providers');
+      setAiProviders(data);
+    } catch (e: any) { console.error(e); }
+    finally { setAiProvidersLoading(false); }
+  };
+
+  const handleAiProviderSave = async () => {
+    setAiProviderMsg('');
+    try {
+      if (editingProviderId !== null) {
+        // Update — only send api_key if user typed a new one
+        const payload: any = {
+          name: aiProviderForm.name,
+          base_url: aiProviderForm.base_url,
+          model: aiProviderForm.model,
+          is_active: aiProviderForm.is_active,
+        };
+        if (aiProviderForm.api_key) payload.api_key = aiProviderForm.api_key;
+        await adminFetch(`/api/admin/ai-providers/${editingProviderId}`, {
+          method: 'PATCH', body: JSON.stringify(payload),
+        });
+        setAiProviderMsg('✅ تم التحديث بنجاح.');
+      } else {
+        await adminFetch('/api/admin/ai-providers', {
+          method: 'POST', body: JSON.stringify({ ...aiProviderForm }),
+        });
+        setAiProviderMsg('✅ تمت الإضافة بنجاح.');
+      }
+      setAiProviderForm({ name: '', base_url: '', model: '', api_key: '', is_active: false });
+      setEditingProviderId(null);
+      fetchAiProviders();
+    } catch (e: any) {
+      setAiProviderMsg('❌ ' + (e.message || 'فشل الحفظ.'));
+    }
+    setTimeout(() => setAiProviderMsg(''), 4000);
+  };
+
+  const handleAiProviderEdit = (p: any) => {
+    setEditingProviderId(p.id);
+    setAiProviderForm({ name: p.name, base_url: p.base_url, model: p.model, api_key: '', is_active: p.is_active });
+    setShowApiKey(false);
+    setActiveTab('ai-providers');
+  };
+
+  const handleAiProviderDelete = async (id: number) => {
+    if (!window.confirm('هل أنت متأكد من حذف هذا المزوّد؟')) return;
+    try {
+      await adminFetch(`/api/admin/ai-providers/${id}`, { method: 'DELETE' });
+      fetchAiProviders();
+    } catch (e: any) { alert(e.message); }
+  };
+
+  const handleAiProviderToggleActive = async (id: number, currentActive: boolean) => {
+    try {
+      await adminFetch(`/api/admin/ai-providers/${id}`, {
+        method: 'PATCH', body: JSON.stringify({ is_active: !currentActive }),
+      });
+      fetchAiProviders();
+    } catch (e: any) { alert(e.message); }
   };
 
   if (!profile) return <div className="p-8 text-center dark:text-gray-300">{isAr ? 'جاري التحميل...' : 'Loading...'}</div>;
@@ -293,6 +367,13 @@ export default function AdminDashboardPage({ session, profile }: { session: any,
           >
             <BarChart2 className={`${isAr ? 'ml-3' : 'mr-3'} h-5 w-5`} />
             {isAr ? 'التحليلات' : 'Analytics'}
+          </button>
+          <button
+            onClick={() => { setActiveTab('ai-providers'); setEditingProviderId(null); setAiProviderForm({ name: '', base_url: '', model: '', api_key: '', is_active: false }); }}
+            className={`${activeTab === 'ai-providers' ? 'bg-indigo-50 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:bg-slate-800 dark:hover:bg-gray-700 hover:text-gray-900 dark:text-gray-100 dark:hover:text-gray-100'} group flex items-center px-3 py-2 text-sm font-medium rounded-md w-full transition-colors`}
+          >
+            <Cpu className={`${isAr ? 'ml-3' : 'mr-3'} h-5 w-5`} />
+            {isAr ? 'مزوّدو الذكاء الاصطناعي' : 'AI Providers'}
           </button>
         </nav>
       </div>
@@ -533,6 +614,126 @@ export default function AdminDashboardPage({ session, profile }: { session: any,
                       </ResponsiveContainer>
                     )}
                   </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* AI Providers Tab */}
+          {activeTab === 'ai-providers' && (
+            <div className="space-y-6">
+              <h2 className="text-2xl font-bold text-gray-900 dark:text-gray-100">{isAr ? 'مزوّدو الذكاء الاصطناعي' : 'AI Providers'}</h2>
+              <p className="text-sm text-gray-500 dark:text-gray-400">
+                {isAr
+                  ? 'أضف مزوّدي AI متوافقين مع OpenAI API. المزوّد النشط يُستخدم تلقائياً في جميع طلبات /api/ai/proxy. مفتاح الـ API مخزّن على السيرفر فقط ولا يظهر في الواجهة أبداً.'
+                  : 'Add OpenAI-compatible AI providers. The active provider is used automatically for all /api/ai/proxy requests. API keys are stored server-side only and never exposed to the client.'}
+              </p>
+
+              {/* Form */}
+              <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-100 dark:border-gray-700 p-6 shadow-sm">
+                <h3 className="text-base font-semibold text-gray-900 dark:text-gray-100 mb-4">
+                  {editingProviderId !== null ? (isAr ? '✏️ تعديل مزوّد' : '✏️ Edit Provider') : (isAr ? '➕ إضافة مزوّد جديد' : '➕ Add New Provider')}
+                </h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">{isAr ? 'الاسم' : 'Name'}</label>
+                    <input value={aiProviderForm.name} onChange={e => setAiProviderForm(p => ({ ...p, name: e.target.value }))}
+                      placeholder="e.g. Dahl Kimi K2" className="w-full rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 px-3 py-2 text-sm text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-indigo-500 outline-none" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Base URL</label>
+                    <input value={aiProviderForm.base_url} onChange={e => setAiProviderForm(p => ({ ...p, base_url: e.target.value }))}
+                      placeholder="https://inference.dahl.global/v1" className="w-full rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 px-3 py-2 text-sm text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-indigo-500 outline-none" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Model</label>
+                    <input value={aiProviderForm.model} onChange={e => setAiProviderForm(p => ({ ...p, model: e.target.value }))}
+                      placeholder="moonshotai/Kimi-K2.6" className="w-full rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 px-3 py-2 text-sm text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-indigo-500 outline-none" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                      API Key {editingProviderId !== null && <span className="text-gray-400">(اتركه فارغاً للإبقاء على المفتاح الحالي)</span>}
+                    </label>
+                    <div className="relative">
+                      <input type={showApiKey ? 'text' : 'password'} value={aiProviderForm.api_key}
+                        onChange={e => setAiProviderForm(p => ({ ...p, api_key: e.target.value }))}
+                        placeholder={editingProviderId !== null ? '••••••••••••• (unchanged)' : 'sk-...'}
+                        className="w-full rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 px-3 py-2 pr-10 text-sm text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-indigo-500 outline-none" />
+                      <button type="button" onClick={() => setShowApiKey(v => !v)}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">
+                        {showApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+                <div className="mt-4 flex items-center gap-4">
+                  <label className="flex items-center gap-2 cursor-pointer select-none">
+                    <input type="checkbox" checked={aiProviderForm.is_active} onChange={e => setAiProviderForm(p => ({ ...p, is_active: e.target.checked }))}
+                      className="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500" />
+                    <span className="text-sm text-gray-700 dark:text-gray-300">{isAr ? 'تفعيل (يُعطّل كل المزودين الآخرين)' : 'Set as Active (disables all others)'}</span>
+                  </label>
+                </div>
+                {aiProviderMsg && <p className="mt-3 text-sm font-medium">{aiProviderMsg}</p>}
+                <div className="mt-4 flex gap-2">
+                  <button onClick={handleAiProviderSave}
+                    className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-semibold transition-colors flex items-center gap-2">
+                    <Plus className="h-4 w-4" />
+                    {editingProviderId !== null ? (isAr ? 'حفظ التعديلات' : 'Save Changes') : (isAr ? 'إضافة مزوّد' : 'Add Provider')}
+                  </button>
+                  {editingProviderId !== null && (
+                    <button onClick={() => { setEditingProviderId(null); setAiProviderForm({ name: '', base_url: '', model: '', api_key: '', is_active: false }); }}
+                      className="px-4 py-2 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 rounded-lg text-sm font-semibold transition-colors">
+                      {isAr ? 'إلغاء التعديل' : 'Cancel Edit'}
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Providers List */}
+              {aiProvidersLoading ? (
+                <div className="text-center py-10 text-gray-400">{isAr ? 'جاري التحميل...' : 'Loading...'}</div>
+              ) : aiProviders.length === 0 ? (
+                <div className="text-center py-10 text-gray-400 dark:text-gray-500 text-sm">{isAr ? 'لا يوجد مزودون بعد. أضف أول مزوّد.' : 'No providers yet. Add your first provider above.'}</div>
+              ) : (
+                <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-100 dark:border-gray-700 overflow-hidden shadow-sm">
+                  <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700 text-sm">
+                    <thead className="bg-gray-50 dark:bg-gray-900/50">
+                      <tr>
+                        <th className="px-4 py-3 text-start font-semibold text-gray-900 dark:text-gray-100">{isAr ? 'الاسم' : 'Name'}</th>
+                        <th className="px-4 py-3 text-start font-semibold text-gray-900 dark:text-gray-100">Base URL</th>
+                        <th className="px-4 py-3 text-start font-semibold text-gray-900 dark:text-gray-100">Model</th>
+                        <th className="px-4 py-3 text-start font-semibold text-gray-900 dark:text-gray-100">API Key</th>
+                        <th className="px-4 py-3 text-start font-semibold text-gray-900 dark:text-gray-100">{isAr ? 'الحالة' : 'Status'}</th>
+                        <th className="px-4 py-3 text-end font-semibold text-gray-900 dark:text-gray-100">{isAr ? 'إجراءات' : 'Actions'}</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
+                      {aiProviders.map((p: any) => (
+                        <tr key={p.id} className="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
+                          <td className="px-4 py-3 font-medium text-gray-900 dark:text-gray-100">{p.name}</td>
+                          <td className="px-4 py-3 text-gray-500 dark:text-gray-400 text-xs font-mono max-w-[200px] truncate">{p.base_url}</td>
+                          <td className="px-4 py-3 text-gray-500 dark:text-gray-400 text-xs font-mono">{p.model}</td>
+                          <td className="px-4 py-3 text-gray-400 dark:text-gray-500 text-xs">••••••••••••</td>
+                          <td className="px-4 py-3">
+                            <button onClick={() => handleAiProviderToggleActive(p.id, p.is_active)}
+                              className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium cursor-pointer transition-colors ${p.is_active ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400 hover:bg-green-200' : 'bg-gray-100 text-gray-500 dark:bg-gray-700 dark:text-gray-400 hover:bg-gray-200'}`}>
+                              {p.is_active ? (isAr ? '● نشط' : '● Active') : (isAr ? '○ غير نشط' : '○ Inactive')}
+                            </button>
+                          </td>
+                          <td className="px-4 py-3 text-end">
+                            <button onClick={() => handleAiProviderEdit(p)}
+                              className="text-indigo-600 dark:text-indigo-400 hover:text-indigo-700 p-1 rounded hover:bg-indigo-50 dark:hover:bg-indigo-900/30 transition-colors mr-1">
+                              <Edit2 className="h-4 w-4" />
+                            </button>
+                            <button onClick={() => handleAiProviderDelete(p.id)}
+                              className="text-red-500 hover:text-red-700 p-1 rounded hover:bg-red-50 dark:hover:bg-red-900/30 transition-colors">
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
               )}
             </div>

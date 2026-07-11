@@ -5,40 +5,43 @@
 
 .cv-bank-wrapper {
   --font-family: 'Inter', 'Tajawal', sans-serif;
-  --border-radius: 8px;
-  --transition-fast: 0.2s ease;
-  --transition-slow: 0.3s ease-in-out;
+  --border-radius: 12px;
+  --transition-fast: 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-slow: 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 
-  /* Light Theme (Default) */
-  --bg-primary: #f5f7fa;
-  --bg-secondary: #ffffff;
-  --bg-tertiary: #e9f3ff;
-  --text-primary: #1a202c;
-  --text-secondary: #718096;
-  --border-color: #e2e8f0;
-  --accent-primary: #4a90e2;
-  --accent-primary-hover: #357abd;
-  --accent-secondary: #50e3c2;
-  --accent-success: #48bb78;
-  --accent-error: #e53e3e;
+  /* Light Theme (Premium) */
+  --bg-primary: #f8fafc;
+  --bg-secondary: rgba(255, 255, 255, 0.8);
+  --bg-tertiary: #eef2ff;
+  --text-primary: #0f172a;
+  --text-secondary: #64748b;
+  --border-color: rgba(226, 232, 240, 0.8);
+  --accent-primary: #4f46e5;
+  --accent-primary-hover: #4338ca;
+  --accent-secondary: #14b8a6;
+  --accent-success: #10b981;
+  --accent-error: #ef4444;
   --accent-favorite: #f59e0b;
-  --shadow-sm: 0 2px 4px rgba(0, 0, 0, 0.05);
-  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.04);
+  --shadow-md: 0 10px 15px -3px rgba(0, 0, 0, 0.05), 0 4px 6px -4px rgba(0, 0, 0, 0.025);
+  
+  /* Glassmorphism */
+  --backdrop-blur: blur(12px);
 }
 
 .dark .cv-bank-wrapper {
-  --bg-primary: #1a202c;
-  --bg-secondary: #2d3748;
-  --bg-tertiary: #4a5568;
-  --text-primary: #f7fafc;
-  --text-secondary: #a0aec0;
-  --border-color: #4a5568;
-  --accent-primary: #63b3ed;
-  --accent-primary-hover: #90cdf4;
-  --accent-secondary: #4fd1c5;
-  --accent-success: #68d391;
-  --accent-error: #fc8181;
-  --accent-favorite: #f6ad55;
+  --bg-primary: #0f172a;
+  --bg-secondary: rgba(30, 41, 59, 0.7);
+  --bg-tertiary: #1e1b4b;
+  --text-primary: #f8fafc;
+  --text-secondary: #94a3b8;
+  --border-color: rgba(51, 65, 85, 0.6);
+  --accent-primary: #6366f1;
+  --accent-primary-hover: #818cf8;
+  --accent-secondary: #2dd4bf;
+  --accent-success: #34d399;
+  --accent-error: #f87171;
+  --accent-favorite: #fbbf24;
 }
 
 
@@ -77,6 +80,8 @@ html[dir="ltr"] .cv-bank-wrapper { text-align: left; }
   top: 0;
   z-index: 100;
   border-bottom: 1px solid var(--border-color);
+  backdrop-filter: var(--backdrop-blur);
+  -webkit-backdrop-filter: var(--backdrop-blur);
 }
 
 .app-header-left {
@@ -197,6 +202,8 @@ html[dir="ltr"] .cv-bank-wrapper { text-align: left; }
   display: flex;
   flex-direction: column;
   gap: 1rem;
+  backdrop-filter: var(--backdrop-blur);
+  -webkit-backdrop-filter: var(--backdrop-blur);
 }
 
 .control-section h3 {
@@ -421,6 +428,8 @@ button.action-btn:disabled {
   padding: 2rem;
   border-radius: var(--border-radius);
   box-shadow: var(--shadow-md);
+  backdrop-filter: var(--backdrop-blur);
+  -webkit-backdrop-filter: var(--backdrop-blur);
 }
 
 .results-header {
@@ -540,6 +549,8 @@ button.action-btn:disabled {
   display: flex;
   flex-direction: column;
   position: relative;
+  backdrop-filter: var(--backdrop-blur);
+  -webkit-backdrop-filter: var(--backdrop-blur);
 }
 .resume-card:hover {
   transform: translateY(-5px);
