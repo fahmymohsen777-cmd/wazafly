@@ -23,6 +23,148 @@ function getAI() {
   return new GoogleGenAI(apiKey ? { apiKey } : {});
 }
 
+// ─── AI Providers Abstraction ──────────────────────────────────────────────────
+export interface AIProvider {
+  generateContent(options: {
+    contents: any;
+    model?: string;
+    responseMimeType?: string;
+    responseSchema?: any;
+    temperature?: number;
+  }): Promise<{ text: string }>;
+}
+
+export class GeminiProvider implements AIProvider {
+  private ai: any;
+
+  constructor() {
+    const rawKey = process.env.GEMINI_API_KEY || process.env.API_KEY;
+    let apiKey = rawKey?.replace(/^[\"']|[\"']$/g, "");
+    if (!apiKey || apiKey === "MY_GEMINI_API_KEY") apiKey = undefined;
+    this.ai = new GoogleGenAI(apiKey ? { apiKey } : {});
+  }
+
+  async generateContent(options: {
+    contents: any;
+    model?: string;
+    responseMimeType?: string;
+    responseSchema?: any;
+    temperature?: number;
+  }): Promise<{ text: string }> {
+    const model = options.model || "gemini-2.5-flash";
+    const config: any = {};
+    if (options.responseMimeType) config.responseMimeType = options.responseMimeType;
+    if (options.responseSchema) config.responseSchema = options.responseSchema;
+    if (options.temperature !== undefined) config.temperature = options.temperature;
+
+    const response = await this.ai.models.generateContent({
+      model,
+      contents: options.contents,
+      config,
+    });
+    return { text: response.text || "" };
+  }
+}
+
+export class DahlProvider implements AIProvider {
+  private apiKey: string;
+  private defaultModel = "moonshotai/Kimi-K2.6";
+
+  constructor() {
+    this.apiKey = (process.env.DAHL_API_KEY || "").replace(/^[\"']|[\"']$/g, "").trim();
+  }
+
+  async generateContent(options: {
+    contents: any;
+    model?: string;
+    responseMimeType?: string;
+    responseSchema?: any;
+    temperature?: number;
+  }): Promise<{ text: string }> {
+    if (!this.apiKey) {
+      throw new Error("Dahl API key is missing. Please set DAHL_API_KEY in your environment.");
+    }
+
+    // Convert contents to chat messages
+    let messages: any[] = [];
+    if (typeof options.contents === "string") {
+      messages = [{ role: "user", content: options.contents }];
+    } else if (Array.isArray(options.contents)) {
+      messages = options.contents.map((item: any) => {
+        if (typeof item === "string") {
+          return { role: "user", content: item };
+        }
+        const role = item.role === "model" ? "assistant" : "user";
+        let content = "";
+        if (Array.isArray(item.parts)) {
+          content = item.parts.map((p: any) => p.text || "").join("\n");
+        } else if (typeof item.content === "string") {
+          content = item.content;
+        }
+        return { role, content };
+      });
+    } else if (options.contents && typeof options.contents === "object") {
+      const role = options.contents.role === "model" ? "assistant" : "user";
+      let content = "";
+      if (Array.isArray(options.contents.parts)) {
+        content = options.contents.parts.map((p: any) => p.text || "").join("\n");
+      } else if (typeof options.contents.content === "string") {
+        content = options.contents.content;
+      }
+      messages = [{ role, content }];
+    }
+
+    const requestBody: any = {
+      model: this.defaultModel,
+      messages: messages,
+    };
+
+    if (options.temperature !== undefined) {
+      requestBody.temperature = options.temperature;
+    }
+
+    if (options.responseMimeType === "application/json") {
+      requestBody.response_format = { type: "json_object" };
+    }
+
+    const response = await fetch("https://inference.dahl.global/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${this.apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(requestBody),
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`Dahl API error (HTTP ${response.status}): ${errText}`);
+    }
+
+    const data: any = await response.json();
+    const text = data.choices?.[0]?.message?.content || "";
+    return { text };
+  }
+}
+
+const geminiProvider = new GeminiProvider();
+const dahlProvider = new DahlProvider();
+
+export function getActiveProviderName(req?: Request): string {
+  if (req?.body?.provider === "dahl" || req?.body?.provider === "gemini") {
+    return req.body.provider;
+  }
+  const envProvider = process.env.AI_PROVIDER?.toLowerCase().trim();
+  if (envProvider === "dahl") return "dahl";
+  return "gemini";
+}
+
+export function getProvider(name: string): AIProvider {
+  if (name === "dahl") return dahlProvider;
+  return geminiProvider;
+}
+
+
 // ─── Simple in-memory rate limiter ───────────────────────────────────────────
 const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
 const RATE_LIMIT = 30; // requests per window
@@ -161,22 +303,21 @@ async function startServer() {
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 25_000);
 
+        const providerName = getActiveProviderName(req);
         try {
-          const ai = getAI();
-          const response = await ai.models.generateContent({
+          const provider = getProvider(providerName);
+          const response = await provider.generateContent({
             model: "gemini-2.5-flash",
             contents: `Convert this HR search query into JSON filters for a candidate database.\nQuery: "${query}"`,
-            config: {
-              responseMimeType: "application/json",
-              responseSchema: {
-                type: Type.OBJECT,
-                properties: {
-                  skills: { type: Type.ARRAY, items: { type: Type.STRING }, description: "Array of skills" },
-                  city: { type: Type.STRING, description: "City or location" },
-                  minExperience: { type: Type.NUMBER, description: "Minimum years of experience" },
-                  jobTitle: { type: Type.STRING, description: "Job title" },
-                  maxSalary: { type: Type.NUMBER, description: "Maximum salary" },
-                },
+            responseMimeType: "application/json",
+            responseSchema: {
+              type: Type.OBJECT,
+              properties: {
+                skills: { type: Type.ARRAY, items: { type: Type.STRING }, description: "Array of skills" },
+                city: { type: Type.STRING, description: "City or location" },
+                minExperience: { type: Type.NUMBER, description: "Minimum years of experience" },
+                jobTitle: { type: Type.STRING, description: "Job title" },
+                maxSalary: { type: Type.NUMBER, description: "Maximum salary" },
               },
             },
           });
@@ -191,10 +332,11 @@ async function startServer() {
         }
       } catch (err: any) {
         const status = err.status || 500;
-        const isInvalidKey = err.message?.includes("API key not valid") || err.message?.includes("API_KEY_INVALID");
+        const providerName = getActiveProviderName(req);
+        const isInvalidKey = err.message?.includes("API key not valid") || err.message?.includes("API_KEY_INVALID") || err.message?.includes("Dahl API key");
         res.status(status).json({
           error: isInvalidKey
-            ? "مفتاح Gemini غير صحيح — تحقق من إعدادات السيرفر."
+            ? `مفتاح ${providerName === 'dahl' ? 'Dahl' : 'Gemini'} غير صحيح — تحقق من إعدادات السيرفر.`
             : err.message || "فشل في معالجة البحث.",
         });
       }
@@ -218,9 +360,10 @@ async function startServer() {
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 30_000);
 
+        const providerName = getActiveProviderName(req);
         try {
-          const ai = getAI();
-          const response = await ai.models.generateContent({
+          const provider = getProvider(providerName);
+          const response = await provider.generateContent({
             model: "gemini-2.5-flash",
             contents: `Generate a professional CV in Markdown format:
 Name: ${name}
@@ -242,10 +385,11 @@ Make it well-structured, professional, and ready to export as PDF.`,
         }
       } catch (err: any) {
         const status = err.status || 500;
-        const isInvalidKey = err.message?.includes("API key not valid") || err.message?.includes("API_KEY_INVALID");
+        const providerName = getActiveProviderName(req);
+        const isInvalidKey = err.message?.includes("API key not valid") || err.message?.includes("API_KEY_INVALID") || err.message?.includes("Dahl API key");
         res.status(status).json({
           error: isInvalidKey
-            ? "مفتاح Gemini غير صحيح."
+            ? `مفتاح ${providerName === 'dahl' ? 'Dahl' : 'Gemini'} غير صحيح.`
             : err.message || "فشل في إنشاء السيرة الذاتية.",
         });
       }
@@ -265,9 +409,12 @@ Make it well-structured, professional, and ready to export as PDF.`,
           return res.status(400).json({ error: "معلمات غير صالحة." });
         }
 
-        const ALLOWED_MODELS = ["gemini-2.5-flash"];
-        if (!ALLOWED_MODELS.includes(params.model)) {
-          return res.status(400).json({ error: "model غير مسموح" });
+        const providerName = getActiveProviderName(req);
+        if (providerName === "gemini") {
+          const ALLOWED_MODELS = ["gemini-2.5-flash"];
+          if (!ALLOWED_MODELS.includes(params.model)) {
+            return res.status(400).json({ error: "model غير مسموح" });
+          }
         }
         if (JSON.stringify(params.contents).length > 20000) {
           return res.status(400).json({ error: "الطلب أكبر من المسموح" });
@@ -277,8 +424,14 @@ Make it well-structured, professional, and ready to export as PDF.`,
         const timeout = setTimeout(() => controller.abort(), 60_000);
 
         try {
-          const ai = getAI();
-          const response = await ai.models.generateContent(params);
+          const provider = getProvider(providerName);
+          const response = await provider.generateContent({
+            model: params.model,
+            contents: params.contents,
+            responseMimeType: params.config?.responseMimeType,
+            responseSchema: params.config?.responseSchema,
+            temperature: params.config?.temperature,
+          });
           clearTimeout(timeout);
           res.json({ text: response.text });
         } catch (err: any) {
@@ -290,10 +443,11 @@ Make it well-structured, professional, and ready to export as PDF.`,
         }
       } catch (err: any) {
         const status = err.status || 500;
-        const isInvalidKey = err.message?.includes("API key not valid") || err.message?.includes("API_KEY_INVALID");
+        const providerName = getActiveProviderName(req);
+        const isInvalidKey = err.message?.includes("API key not valid") || err.message?.includes("API_KEY_INVALID") || err.message?.includes("Dahl API key");
         res.status(status).json({
           error: isInvalidKey
-            ? "مفتاح Gemini غير صحيح."
+            ? `مفتاح ${providerName === 'dahl' ? 'Dahl' : 'Gemini'} غير صحيح.`
             : err.message || "فشل في معالجة طلب الذكاء الاصطناعي.",
         });
       }
@@ -330,15 +484,16 @@ Make it well-structured, professional, and ready to export as PDF.`,
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 30_000);
 
+        const providerName = getActiveProviderName(req);
         try {
-          const ai = getAI();
-          const response = await ai.models.generateContent({
+          const provider = getProvider(providerName);
+          const response = await provider.generateContent({
             model: "gemini-2.5-flash",
             contents: `You are an expert technical recruiter. Score candidates based on the query.
 HR Search Query: "${query}"
 Candidates: ${JSON.stringify(candidatesToScore, null, 2)}
 Return a JSON array: [{"id": "...", "score": 0-100, "reason": "one sentence"}]`,
-            config: { responseMimeType: "application/json" },
+            responseMimeType: "application/json",
           });
           clearTimeout(timeout);
           const rankings = safeParseGeminiJson(response.text, []);
