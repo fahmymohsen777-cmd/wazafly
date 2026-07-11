@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
-import { Users, Briefcase, UserCheck, CreditCard, CheckCircle, Trash2, BarChart2, Cpu, Plus, Eye, EyeOff, Edit2 } from 'lucide-react';
+import { Users, Briefcase, UserCheck, CreditCard, CheckCircle, Trash2, BarChart2, Cpu, Plus, Eye, EyeOff, Edit2, AlertCircle } from 'lucide-react';
 import { useSettings } from '../contexts/SettingsContext';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts';
 
@@ -40,6 +40,7 @@ export default function AdminDashboardPage({ session, profile }: { session: any,
   const [users, setUsers] = useState<any[]>([]);
   const [payments, setPayments] = useState<any[]>([]);
   const [activeTab, setActiveTab] = useState('overview');
+  const [adminError, setAdminError] = useState<string | null>(null);
 
   // Subscription Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -224,8 +225,14 @@ export default function AdminDashboardPage({ session, profile }: { session: any,
 
       setUsers(allUsers);
       setPayments(allPayments);
-    } catch (error) {
+      setAdminError(null);
+    } catch (error: any) {
       console.error('Error fetching admin data:', error);
+      setAdminError(
+        isAr 
+          ? `خطأ في جلب بيانات الإدارة. تأكد من إضافة المتغير SUPABASE_SERVICE_ROLE_KEY في Vercel. التفاصيل: ${error.message}`
+          : `Error fetching admin data. Make sure SUPABASE_SERVICE_ROLE_KEY is set in Vercel. Details: ${error.message}`
+      );
     } finally {
       setLoading(false);
     }
@@ -382,11 +389,26 @@ export default function AdminDashboardPage({ session, profile }: { session: any,
       <div className="flex-1 overflow-auto">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10">
           <div className="mb-8">
-            <h1 className="text-3xl font-bold text-gray-900 dark:text-gray-100">{isAr ? 'نظرة عامة' : 'Dashboard Overview'}</h1>
-          </div>
+            <h1 className="text-2xl font-bold text-gray-900">
+            {isAr ? 'لوحة تحكم الإدارة' : 'Admin Dashboard'}
+          </h1>
+        </div>
 
-          {/* Stats */}
-          <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-5 mb-8">
+        {adminError && (
+          <div className="bg-red-50 border-l-4 border-red-500 p-4 mb-6">
+            <div className="flex">
+              <div className="flex-shrink-0">
+                <AlertCircle className="h-5 w-5 text-red-400" />
+              </div>
+              <div className="ml-3">
+                <p className="text-sm text-red-700 font-bold">{adminError}</p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Stats */}
+        <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-4 mb-8">
             <div className="bg-white dark:bg-gray-800 overflow-hidden shadow rounded-lg pointer-events-none transition-colors border border-gray-100 dark:border-gray-700">
               <div className="p-5 flex items-center">
                 <div className="flex-shrink-0"><Users className="h-6 w-6 text-gray-400 dark:text-gray-500" /></div>

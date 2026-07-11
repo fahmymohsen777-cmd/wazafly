@@ -498,18 +498,31 @@ const CVBankApp = ({ supabaseClient, session, T, onLangChange, theme, onThemeCha
     let allFiles = [];
     const supportedExtensions = ['.pdf', '.doc', '.docx', '.xls', '.xlsx'];
 
-    for (const file of files) {
-        if (file.name.toLowerCase().endsWith('.zip')) {
-            const zip = await JSZip.loadAsync(file);
-            for (const filename in zip.files) {
-                if (!zip.files[filename].dir && supportedExtensions.some(ext => filename.toLowerCase().endsWith(ext))) {
-                    const blob = await zip.files[filename].async('blob');
-                    allFiles.push(new File([blob], filename));
+    try {
+        for (const file of files) {
+            if (file.name.toLowerCase().endsWith('.zip')) {
+                const zip = await JSZip.loadAsync(file);
+                for (const filename in zip.files) {
+                    if (!zip.files[filename].dir && supportedExtensions.some(ext => filename.toLowerCase().endsWith(ext))) {
+                        const blob = await zip.files[filename].async('blob');
+                        allFiles.push(new File([blob], filename));
+                    }
                 }
+            } else if (supportedExtensions.some(ext => file.name.toLowerCase().endsWith(ext))) {
+                allFiles.push(file);
             }
-        } else if (supportedExtensions.some(ext => file.name.toLowerCase().endsWith(ext))) {
-            allFiles.push(file);
         }
+    } catch (e) {
+        console.error("Error preparing files:", e);
+        setError("فشل تجهيز الملفات: " + (e.message || String(e)));
+        setStatusMessage('');
+        return;
+    }
+
+    if (allFiles.length === 0) {
+        setError("لم يتم العثور على ملفات مدعومة (PDF, DOC, DOCX, XLS, XLSX, ZIP).");
+        setStatusMessage('');
+        return;
     }
 
     const newQueueItems = allFiles.map(file => ({

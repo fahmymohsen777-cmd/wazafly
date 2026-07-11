@@ -513,26 +513,10 @@ const App = () => {
   };
 
   return (
-    <React.Fragment>
-      <GuideModal isVisible={isGuideVisible} onClose={() => setGuideVisible(false)} t={t} />
-      <CVStrengthTesterModal isVisible={isTesterVisible} onClose={() => setTesterVisible(false)} t={t} cvData={cvData} />
-      <ImportStatusModal status={importStatus} />
+    <div className="cv-builder-wrapper">
       <header>
         <h1>{t.headerTitle}</h1>
         <div className="header-controls">
-            <input
-                type="file"
-                ref={fileInputRef}
-                onChange={handlePdfImport}
-                accept="application/pdf"
-                style={{ display: 'none' }}
-                aria-hidden="true"
-            />
-            <button className="import-btn" onClick={() => fileInputRef.current.click()} disabled={!!importStatus}>
-                {importStatus ? t.importing : t.importFromPdf}
-            </button>
-            <button className="header-btn" onClick={() => setGuideVisible(true)}>{t.guide}</button>
-            <button className="header-btn" onClick={() => setTesterVisible(true)}>{t.cvStrengthTest}</button>
             <button className="header-btn" onClick={toggleLanguage}>{t.switchLang}</button>
             <button className="download-btn" onClick={handleDownloadPdf}>{t.downloadPdf}</button>
         </div>
@@ -824,7 +808,7 @@ const App = () => {
       <footer>
         <p>{t.createdBy}</p>
       </footer>
-    </React.Fragment>
+    </div>
   );
 };
 

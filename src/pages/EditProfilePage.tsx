@@ -5,8 +5,7 @@ import { useSettings } from '../contexts/SettingsContext';
 import { EGYPT_GOVERNORATES, JOB_CATEGORIES } from '../lib/constants';
 import { GoogleGenAI, Type } from '@google/genai';
 
-declare var pdfjsLib: any;
-
+import * as pdfjsLib from 'pdfjs-dist';
 export default function EditProfilePage({ session, profile }: { session: any, profile: any }) {
   const navigate = useNavigate();
   const { t, language } = useSettings();
@@ -161,7 +160,7 @@ export default function EditProfilePage({ session, profile }: { session: any, pr
       
       if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
         pdfjsLib.GlobalWorkerOptions.workerSrc =
-          'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.worker.min.js';
+          `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
       }
       
       const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
