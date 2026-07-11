@@ -6,6 +6,15 @@ import { EGYPT_GOVERNORATES, JOB_CATEGORIES } from '../lib/constants';
 import { GoogleGenAI, Type } from '@google/genai';
 
 import * as pdfjsLib from 'pdfjs-dist';
+// Bundle the pdf.js worker locally via Vite instead of loading it from an
+// external CDN. Loading it from cdnjs at runtime depends on network access,
+// exact version matching between the installed npm package and the CDN file,
+// and the page's Content-Security-Policy — any of which can fail with
+// "Setting up fake worker failed: Cannot load script at ...". Using `?url`
+// gives Vite a same-origin, version-matched URL at build time, which is the
+// officially recommended setup and removes the CDN dependency entirely.
+import pdfjsWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
+
 export default function EditProfilePage({ session, profile }: { session: any, profile: any }) {
   const navigate = useNavigate();
   const { t, language } = useSettings();
@@ -159,8 +168,7 @@ export default function EditProfilePage({ session, profile }: { session: any, pr
       const arrayBuffer = await file.arrayBuffer();
       
       if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
-        pdfjsLib.GlobalWorkerOptions.workerSrc =
-          `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
+        pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorkerUrl;
       }
       
       const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;

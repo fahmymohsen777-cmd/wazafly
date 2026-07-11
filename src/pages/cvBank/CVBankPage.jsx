@@ -497,10 +497,26 @@ const CVBankApp = ({ supabaseClient, session, T, onLangChange, theme, onThemeCha
 
     let allFiles = [];
     const supportedExtensions = ['.pdf', '.doc', '.docx', '.xls', '.xlsx'];
+    // Some browsers/OS file pickers keep a valid CV file but report an empty
+    // or generic `.name` (e.g. pasted files, some mobile share sheets). Fall
+    // back to checking the MIME type so real PDFs/Word/Excel files are not
+    // rejected just because the extension check missed them.
+    const supportedMimeTypes = [
+        'application/pdf',
+        'application/msword',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'application/vnd.ms-excel',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    ];
+    const isSupportedFile = (f) => {
+        const name = (f?.name || '').toLowerCase().trim();
+        return supportedExtensions.some(ext => name.endsWith(ext)) || supportedMimeTypes.includes(f?.type);
+    };
 
     try {
         for (const file of files) {
-            if (file.name.toLowerCase().endsWith('.zip')) {
+            const name = (file?.name || '').toLowerCase().trim();
+            if (name.endsWith('.zip') || file?.type === 'application/zip' || file?.type === 'application/x-zip-compressed') {
                 const zip = await JSZip.loadAsync(file);
                 for (const filename in zip.files) {
                     if (!zip.files[filename].dir && supportedExtensions.some(ext => filename.toLowerCase().endsWith(ext))) {
@@ -508,7 +524,7 @@ const CVBankApp = ({ supabaseClient, session, T, onLangChange, theme, onThemeCha
                         allFiles.push(new File([blob], filename));
                     }
                 }
-            } else if (supportedExtensions.some(ext => file.name.toLowerCase().endsWith(ext))) {
+            } else if (isSupportedFile(file)) {
                 allFiles.push(file);
             }
         }

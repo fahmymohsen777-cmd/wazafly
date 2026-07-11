@@ -1,5 +1,4 @@
 import express, { Request, Response, NextFunction } from "express";
-import { createServer as createViteServer } from "vite";
 import cors from "cors";
 import Stripe from "stripe";
 import { GoogleGenAI, Type } from "@google/genai";
@@ -111,10 +110,9 @@ function validateString(val: unknown, name: string, maxLen = 2000): string {
   return val.trim();
 }
 
-// ─── Main Server ──────────────────────────────────────────────────────────────
-async function startServer() {
+// ─── Main Server (Express app — also used as a Vercel serverless function) ──
+function createApp() {
   const app = express();
-  const PORT = parseInt(process.env.PORT || '3001', 10);
 
   // CORS — only allow our own domain
   const allowedOrigin = process.env.APP_URL || "http://localhost:3001";
@@ -1014,8 +1012,34 @@ Return a JSON array: [{"id": "...", "score": 0-100, "reason": "one sentence"}]`,
     res.status(404).json({ error: "المسار غير موجود." });
   });
 
-  // ─── Vite or static files ─────────────────────────────────────────────────
+  // ─── Global Error Middleware ──────────────────────────────────────────────
+  app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
+    console.error("[Server Error]", err?.message || err);
+    res.status(err?.status || 500).json({ error: "حدث خطأ داخلي في السيرفر." });
+  });
+
+  return app;
+}
+
+// ─── Exported Express app ───────────────────────────────────────────────────
+// IMPORTANT (Vercel fix): this app is imported directly by api/[...path].ts and
+// used as a Vercel serverless function. Previously this app only ever existed
+// inside startServer()'s local scope and was never exported, so NOTHING under
+// /api/* was reachable in production on Vercel (Vercel returned its own 404
+// "The page could not be found" HTML page for every /api/* request — this is
+// exactly the "Unexpected token 'T', \"The page c\"..." JSON-parse error seen
+// in the admin dashboard, and the root cause of every /api/* failure in prod).
+export const app = createApp();
+
+// ─── Local development / persistent server bootstrap ───────────────────────
+// This only runs for `npm run dev` / `npm run preview` (tsx server.ts). It
+// never runs on Vercel — Vercel invokes the exported `app` directly per
+// request via api/[...path].ts instead of calling listen().
+async function startLocalServer() {
+  const PORT = parseInt(process.env.PORT || "3001", 10);
+
   if (process.env.NODE_ENV !== "production") {
+    const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
@@ -1025,12 +1049,6 @@ Return a JSON array: [{"id": "...", "score": 0-100, "reason": "one sentence"}]`,
     app.use(express.static("dist"));
     app.get("*", (_req, res) => res.sendFile("dist/index.html", { root: "." }));
   }
-
-  // ─── Global Error Middleware ──────────────────────────────────────────────
-  app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
-    console.error("[Server Error]", err?.message || err);
-    res.status(err?.status || 500).json({ error: "حدث خطأ داخلي في السيرفر." });
-  });
 
   // ─── Process-level safety nets ────────────────────────────────────────────
   process.on("uncaughtException", (err) => {
@@ -1046,4 +1064,7 @@ Return a JSON array: [{"id": "...", "score": 0-100, "reason": "one sentence"}]`,
   });
 }
 
-startServer();
+// Only boot a persistent listener outside of Vercel's serverless runtime.
+if (!process.env.VERCEL) {
+  startLocalServer();
+}
