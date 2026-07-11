@@ -33,6 +33,10 @@ export default function DashboardPage({ session, profile }: { session: any, prof
       navigate('/login');
       return;
     }
+    if (profile?.role === 'admin') {
+      navigate('/admin');
+      return;
+    }
 
     const handleSubscriptionSuccess = async () => {
       const urlParams = new URLSearchParams(window.location.search);

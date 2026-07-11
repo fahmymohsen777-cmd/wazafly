@@ -545,9 +545,24 @@ const CVBankApp = ({ supabaseClient, session, T, onLangChange, theme, onThemeCha
     const processItem = async (item) => {
         setUploadQueue(prev => prev.map(i => i.id === item.id ? { ...i, status: 'processing' } : i));
         try {
-            const analysisData = await analyzeResume(item.file);
-            if (!analysisData) {
-                throw new Error(`Analysis returned no data for ${item.file.name}.`);
+            let analysisData;
+            try {
+                analysisData = await analyzeResume(item.file);
+                if (!analysisData) {
+                    throw new Error(`Analysis returned no data for ${item.file.name}.`);
+                }
+            } catch (analyzeError) {
+                console.warn("AI analysis failed, proceeding with default values.", analyzeError);
+                analysisData = {
+                    name: item.file.name.replace(/\.[^/.]+$/, ""),
+                    age: "غير محدد",
+                    governorate: "غير محدد",
+                    email: "",
+                    phone: "",
+                    appliedFor: "غير محدد",
+                    skills: [],
+                    aiSummary: "تعذر تحليل السيرة الذاتية بواسطة الذكاء الاصطناعي."
+                };
             }
             const currentFolderId = (selectedFolderId !== 'all' && selectedFolderId !== 'unassigned' && selectedFolderId !== 'favorites') ? selectedFolderId : null;
             const filePath = `${session.user.id}/${Date.now()}-${item.file.name.replace(/\s/g, '_')}`;

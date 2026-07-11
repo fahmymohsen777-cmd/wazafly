@@ -128,7 +128,9 @@ function Navbar({
               </Link>
             ) : (
               <>
-                <Link to="/dashboard" className="text-gray-500 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white px-3 py-2 rounded-md text-sm font-medium transition-colors">{t('nav.dashboard')}</Link>
+                {profile?.role !== 'admin' && (
+                  <Link to="/dashboard" className="text-gray-500 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white px-3 py-2 rounded-md text-sm font-medium transition-colors">{t('nav.dashboard')}</Link>
+                )}
                 {profile?.role === 'hr' && (
                   <>
                     <Link to="/search" className="text-gray-500 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white px-3 py-2 rounded-md text-sm font-medium transition-colors">{t('nav.search') || 'بحث'}</Link>
@@ -254,7 +256,9 @@ function Navbar({
                 </>
               ) : (
                 <>
-                  <Link to="/dashboard" onClick={() => setMobileMenuOpen(false)} className="block px-3 py-2 rounded-md text-base font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700">{t('nav.dashboard')}</Link>
+                  {profile?.role !== 'admin' && (
+                    <Link to="/dashboard" onClick={() => setMobileMenuOpen(false)} className="block px-3 py-2 rounded-md text-base font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700">{t('nav.dashboard')}</Link>
+                  )}
                   {profile?.role === 'hr' && (
                     <>
                       <Link to="/search" onClick={() => setMobileMenuOpen(false)} className="block px-3 py-2 rounded-md text-base font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700">{t('nav.search') || 'بحث'}</Link>
