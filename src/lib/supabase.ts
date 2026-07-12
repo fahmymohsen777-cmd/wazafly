@@ -4,7 +4,7 @@ const supabaseUrl = 'https://ndjoxbcedhajbiaihpeo.supabase.co'
 
 // Publishable anon key — safe to expose in client-side code.
 // This key respects Row Level Security (RLS) policies.
-const supabaseAnonKey = 'sb_publishable__nMaa2erReFaFMc_Z6qR6w_7q_w2Eiy'
+const supabaseAnonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5kam94YmNlZGhhamJpYWlocGVvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMwMjMyMzQsImV4cCI6MjA5ODU5OTIzNH0.DE2MVyRG9eoa67UjwYjkVI5zfKLPCj35VE21myJqrR4'
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey)
 
