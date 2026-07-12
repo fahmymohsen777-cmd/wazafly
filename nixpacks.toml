@@ -1,0 +1,9 @@
+# nixpacks.toml — Forces Railway to use Node runtime instead of Caddy static server.
+# Without this file, Nixpacks sees Vite/React and deploys as a Caddy-served static site,
+# which causes 405 Method Not Allowed on all POST requests to /api/*.
+
+[phases.build]
+cmds = ["npm run build"]
+
+[start]
+cmd = "npm run start"

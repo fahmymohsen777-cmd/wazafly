@@ -258,12 +258,13 @@ async function startServer() {
   const app = express();
   const PORT = parseInt(process.env.PORT || '3001', 10);
 
-  // CORS — only allow our own domain
+  // CORS — allow localhost in dev and Railway domain in production
   const allowedOrigin = process.env.APP_URL || "http://localhost:3001";
   app.use(cors({
     origin: (origin, cb) => {
       if (!origin) return cb(null, true);
       if (origin.startsWith("http://localhost:") || origin.startsWith("http://127.0.0.1:")) return cb(null, true);
+      if (origin.endsWith(".railway.app")) return cb(null, true);
       if (origin === allowedOrigin) return cb(null, true);
       cb(new Error("Not allowed by CORS"));
     },
