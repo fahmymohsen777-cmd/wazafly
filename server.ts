@@ -417,8 +417,8 @@ Make it well-structured, professional, and ready to export as PDF.`,
             return res.status(400).json({ error: "model غير مسموح" });
           }
         }
-        if (JSON.stringify(params.contents).length > 20000) {
-          return res.status(400).json({ error: "الطلب أكبر من المسموح" });
+        if (JSON.stringify(params.contents).length > 5_000_000) {
+          return res.status(400).json({ error: "الطلب أكبر من المسموح (الحد الأقصى 5MB)" });
         }
 
         const controller = new AbortController();
